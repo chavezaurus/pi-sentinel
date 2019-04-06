@@ -488,6 +488,11 @@ static int decode_frame(void)
 		}
 	}
 
+    FILE *fp=fopen("video.raw","ab");
+    fwrite(buffers[buf.index].start, buf.bytesused, 1, fp);
+    fflush(fp);
+    fclose(fp);
+
 	int isIDR = IsIDR( buffers[buf.index].start, buf.bytesused );
 	
 	long long temp_us = 1000000 * (long long) buf.timestamp.tv_sec + (long long) buf.timestamp.tv_usec;
@@ -558,7 +563,11 @@ static void ProcessDecodedBuffer(void)
 	}
 	
 	int sum = 0;
+	int xsum = 0;
+	int ysum = 0;
 	int count = 0;
+	int xcount = 0;
+	int ycount = 0;
 	
 	unsigned char* pstart = (unsigned char*)workingBuffer->pBuffer;
 	
@@ -574,6 +583,7 @@ static void ProcessDecodedBuffer(void)
 	
 	while ( p < pvend )
 	{
+		xcount = 0;
 		while ( p < psend )
 		{
 			*pTest++ = *p;
@@ -582,16 +592,20 @@ static void ProcessDecodedBuffer(void)
 			int test = c - *pRef - *pMask++;
 			if ( test > 0 )
 			{
-				++count;
 				sum += c;
+				xsum += c * xcount;
+				ysum += c * ycount;
+				++count;
 			}
 				
 			p += 3;
 			++pRef;
+			++xcount;
 		}
 		
 		p += 3840;
 		psend += 5760;
+		++ycount;
 	}
 	
 	pTest = testFrame;
