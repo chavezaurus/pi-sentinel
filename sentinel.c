@@ -29,6 +29,7 @@
 #include "IL/OMX_Broadcom.h"
 
 #define CLEAR(x) memset(&(x), 0, sizeof(x))
+#define FRAMES_TO_KEEP 100
 
 #ifndef V4L2_PIX_FMT_H264
 #define V4L2_PIX_FMT_H264     v4l2_fourcc('H', '2', '6', '4') /* H264 with start codes */
@@ -59,6 +60,24 @@ static long toEpochOffset_us;
 static unsigned char* testFrame;
 static unsigned char* referenceFrame;
 static unsigned char* maskFrame;
+
+static unsigned char* frameBuffers[FRAMES_TO_KEEP];
+static int frameSizes[FRAMES_TO_KEEP];
+static int nextFrameIndex;
+
+static int sumBuffers[FRAMES_TO_KEEP];
+static int xSumBuffers[FRAMES_TO_KEEP];
+static int ySumBuffers[FRAMES_TO_KEEP];
+static int sumCounts[FRAMES_TO_KEEP];
+static int nextSumIndex;
+
+static int triggered;
+static int triggerCounter;
+static int untriggerCounter;
+static int sumThreshold;
+static int eventDuration;
+
+static FILE* eventFile;
 static FILE* logfile;
 
 #define ALIGN(x, y) (((x) + ((y) - 1)) & ~((y) - 1))
@@ -120,27 +139,27 @@ static long long getEpochTimeShift()
 	return epoch_us - uptime_us;
 }
 
-static int IsIDR( const void* p, int size )
+static int IsIDR( const unsigned char* p, int size )
 {
 	unsigned int word = 0xffffffff;
 	int i;
 	
 	for ( i = 0; i < size; ++i )
-	  {
-		  unsigned int c = ((unsigned char *)p)[i];
-		  if ( word == 1 )
-		    {
-				c &= 0x0f;
+	{
+		unsigned int c = p[i];
+		if ( word == 1 )
+		{
+			c &= 0x0f;
 				
-				if ( c == 1 )
-				  return 0;
+			if ( c == 1 )
+				return 0;
 				  
-				if ( c == 5 )
-				  return 1;
-			}
+			if ( c == 5 )
+				return 1;
+		}
 			
-		  word = (word << 8) | c;
-	  }
+		word = (word << 8) | c;
+	}
 	  
 	return 0;
 }
@@ -454,6 +473,16 @@ EventHandler ( OMX_OUT OMX_HANDLETYPE hComponent,
 	return OMX_ErrorNone;
 }
 
+static void keepFrames( const unsigned char* p, int size )
+{
+	frameBuffers[nextFrameIndex] = (unsigned char *)realloc( frameBuffers[nextFrameIndex], size );
+	frameSizes[nextFrameIndex] = size;
+		
+	memcpy( frameBuffers[nextFrameIndex], p, size );
+	
+	nextFrameIndex = (nextFrameIndex+1) % FRAMES_TO_KEEP;
+} 
+
 static int decode_frame(void)
 {
 	static int count = 0;
@@ -493,6 +522,7 @@ static int decode_frame(void)
     fflush(fp);
     fclose(fp);
 
+	keepFrames( buffers[buf.index].start, buf.bytesused );
 	int isIDR = IsIDR( buffers[buf.index].start, buf.bytesused );
 	
 	long long temp_us = 1000000 * (long long) buf.timestamp.tv_sec + (long long) buf.timestamp.tv_usec;
@@ -539,7 +569,52 @@ static int decode_frame(void)
 
 	return 1;
 }
+static void initiateTrigger(void)
+{
+	triggered = 1;
+	eventDuration = 0;
+	
+	printf( "Triggered\n" );
+}
 
+static void terminateTrigger(void)
+{
+	triggered = 0;
+	
+	printf( "Untriggered\n" );
+}
+
+static void processTrigger( int sum )
+{
+	if ( triggered == 0 )
+	{
+		if ( sum >= sumThreshold )
+		{
+			++triggerCounter;
+			if ( triggerCounter >= 2 )
+				initiateTrigger();
+		}
+		else
+			triggerCounter = 0;
+	}
+	else
+	{
+		++eventDuration;
+		
+		if ( eventDuration > 60 && sum < sumThreshold )
+		{
+			++untriggerCounter;
+			if ( untriggerCounter >= 2 )
+				terminateTrigger();
+		}
+		else
+		{
+			untriggerCounter = 0;
+			if ( eventDuration > 150 )
+				terminateTrigger();
+		}
+	}
+}
 
 static void ProcessDecodedBuffer(void)
 {
@@ -613,15 +688,20 @@ static void ProcessDecodedBuffer(void)
 	
 	pvend = testFrame + 1920*1080/9;
 	
-	while ( pTest < pvend )
+	if ( triggered == 0 )
 	{
-		int n = *pRef;
-		n *= 15;
-		n += *pTest++;
-		n >>= 4;
+		while ( pTest < pvend )
+		{
+			int n = *pRef;
+			n *= 15;
+			n += *pTest++;
+			n >>= 4;
 		
-		*pRef++ = n;
+			*pRef++ = n;
+		}
 	}
+	
+	processTrigger( sum );
 	
 	t = clock()-t;
 	double duration = (double)t/CLOCKS_PER_SEC;
@@ -800,6 +880,25 @@ static void init_sentinel(void)
 		referenceFrame[i] = 255;
 		maskFrame[i] = 40;
 	}
+	
+	for ( int i = 0; i < FRAMES_TO_KEEP; ++i )
+	{
+		frameBuffers[i] = 0;
+		frameSizes[i] = 0;
+		sumBuffers[i] = 0;
+		sumCounts[i] = 0;
+		xSumBuffers[i] = 0;
+		ySumBuffers[i] = 0;
+	}
+	
+	nextFrameIndex = 0;
+	nextSumIndex = 0;
+	triggered = 0;
+	triggerCounter = 0;
+	untriggerCounter = 0;
+	sumThreshold = 1000;
+	eventDuration = 0;
+	eventFile = 0;
 }
 
 static void uninit_decoder(void)
