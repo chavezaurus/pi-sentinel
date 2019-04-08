@@ -63,6 +63,7 @@ static unsigned char* maskFrame;
 
 static unsigned char* frameBuffers[FRAMES_TO_KEEP];
 static int frameSizes[FRAMES_TO_KEEP];
+static int frameTimestamps[FRAMES_TO_KEEP];
 static int nextFrameIndex;
 
 static int sumBuffers[FRAMES_TO_KEEP];
@@ -473,10 +474,11 @@ EventHandler ( OMX_OUT OMX_HANDLETYPE hComponent,
 	return OMX_ErrorNone;
 }
 
-static void keepFrames( const unsigned char* p, int size )
+static void keepFrames( const unsigned char* p, int size, unsigned int timeStamp_lo )
 {
 	frameBuffers[nextFrameIndex] = (unsigned char *)realloc( frameBuffers[nextFrameIndex], size );
 	frameSizes[nextFrameIndex] = size;
+	frameTimestamps[nextFrameIndex] = timeStamp_lo;
 		
 	memcpy( frameBuffers[nextFrameIndex], p, size );
 	
@@ -488,7 +490,6 @@ static int decode_frame(void)
 	static int count = 0;
 	
 	struct timespec spec;
-    struct tm * ptm;
     int            ms; // Milliseconds
     time_t          s;  // Seconds
 
@@ -522,28 +523,11 @@ static int decode_frame(void)
     fflush(fp);
     fclose(fp);
 
-	keepFrames( buffers[buf.index].start, buf.bytesused );
-	int isIDR = IsIDR( buffers[buf.index].start, buf.bytesused );
-	
-	long long temp_us = 1000000 * (long long) buf.timestamp.tv_sec + (long long) buf.timestamp.tv_usec;
-    long long epochTimeStamp_us = temp_us + toEpochOffset_us ;
+	long long timeStamp_us = 1000000 * (long long) buf.timestamp.tv_sec + buf.timestamp.tv_usec;
+	unsigned int timeStamp_hi = timeStamp_us >> 32;
+	unsigned int timeStamp_lo = timeStamp_us & 0xffffffff;
 
-	if ( isIDR )
-	{
-		clock_gettime(CLOCK_REALTIME, &spec);
-		s  = spec.tv_sec;
-		ms = round(spec.tv_nsec / 1.0e6); // Convert nanoseconds to milliseconds
-		if (ms > 999) 
-		{
-			s++;
-			ms = 0;
-		}
-		
-		ptm = gmtime ( &s );
-		fprintf( logfile, "Time: %d.%06d %2d:%02d:%02d\n", 
-		        buf.timestamp.tv_sec, buf.timestamp.tv_usec, 
-		        ptm->tm_hour, ptm->tm_min, ptm->tm_sec );
-	}
+	keepFrames( buffers[buf.index].start, buf.bytesused, timeStamp_lo );
 	
 	assert(buf.index < n_buffers);
 
@@ -552,10 +536,10 @@ static int decode_frame(void)
 	decoderBuffer->nAllocLen = buf.length;
 	decoderBuffer->nOffset = 0;
 	decoderBuffer->nInputPortIndex = 130;
-	decoderBuffer->nTimeStamp.nLowPart = epochTimeStamp_us & 0xffffffff;
-	decoderBuffer->nTimeStamp.nHighPart = (int) (epochTimeStamp_us >> 32);
+	decoderBuffer->nTimeStamp.nLowPart = timeStamp_lo;
+	decoderBuffer->nTimeStamp.nHighPart = timeStamp_hi;
 	
-	fprintf( logfile, "->--- %u\n", decoderBuffer->nTimeStamp.nLowPart );
+	fprintf( logfile, "->--- %u\n", timeStamp_lo );
 	error = OMX_EmptyThisBuffer( decoderHandle, decoderBuffer );
 
 	if (error != OMX_ErrorNone) {
@@ -569,12 +553,36 @@ static int decode_frame(void)
 
 	return 1;
 }
-static void initiateTrigger(void)
+static void initiateTrigger( unsigned int timeStamp_hi, unsigned int timeStamp_lo )
 {
+    struct tm * ptm;
 	triggered = 1;
 	eventDuration = 0;
 	
-	printf( "Triggered\n" );
+	int backCount = 0;
+	
+	long long timelong = (long long)timeStamp_hi * 1000000 + timeStamp_lo + getEpochTimeShift();
+	time_t unixTime = timelong / 1000000;
+	
+	ptm = gmtime( &unixTime );
+	fprintf( logfile, "Trigger: 02d%02d%02d%\n", ptm->tm_hour, ptm->tm_min, ptm->tm_sec );
+	
+	int sumIndex = (nextSumIndex + FRAMES_TO_KEEP - 1) % FRAMES_TO_KEEP;
+	int frameIndex = (nextFrameIndex + FRAMES_TO_KEEP - 1) % FRAMES_TO_KEEP;
+	
+	while ( frameTimestamps[frameIndex] != timeStamp_lo && backCount++ < 30 )
+		frameIndex = (frameIndex + FRAMES_TO_KEEP - 1) % FRAMES_TO_KEEP;
+		
+	while ( backCount++ < 30 || !IsIDR( frameBuffers[frameIndex], frameSizes[frameIndex] ) )
+	{
+		frameIndex = (frameIndex + FRAMES_TO_KEEP - 1) % FRAMES_TO_KEEP;
+		sumIndex = (sumIndex + FRAMES_TO_KEEP - 1) % FRAMES_TO_KEEP;
+		
+		if ( backCount > 60 )
+			break;
+	}
+	
+	printf( "Triggered %d\n", unixTime );
 }
 
 static void terminateTrigger(void)
@@ -584,7 +592,7 @@ static void terminateTrigger(void)
 	printf( "Untriggered\n" );
 }
 
-static void processTrigger( int sum )
+static void processTrigger( int sum, unsigned int timeStamp_hi, unsigned int timeStamp_lo )
 {
 	if ( triggered == 0 )
 	{
@@ -592,7 +600,7 @@ static void processTrigger( int sum )
 		{
 			++triggerCounter;
 			if ( triggerCounter >= 2 )
-				initiateTrigger();
+				initiateTrigger( timeStamp_hi, timeStamp_lo );
 		}
 		else
 			triggerCounter = 0;
@@ -701,7 +709,13 @@ static void ProcessDecodedBuffer(void)
 		}
 	}
 	
-	processTrigger( sum );
+	sumBuffers[nextSumIndex] = sum;
+	xSumBuffers[nextSumIndex] = xsum;
+	ySumBuffers[nextSumIndex] = ysum;
+	sumCounts[nextSumIndex] = count;
+	nextSumIndex = (nextSumIndex + 1) % FRAMES_TO_KEEP;
+		
+	processTrigger( sum, workingBuffer->nTimeStamp.nHighPart, workingBuffer->nTimeStamp.nLowPart );
 	
 	t = clock()-t;
 	double duration = (double)t/CLOCKS_PER_SEC;
