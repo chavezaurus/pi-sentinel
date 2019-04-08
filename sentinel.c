@@ -77,8 +77,11 @@ static int triggerCounter;
 static int untriggerCounter;
 static int sumThreshold;
 static int eventDuration;
+static unsigned int eventTimeStamp_hi;
+static unsigned int eventTimeStamp_lo;
 
-static FILE* eventFile;
+static FILE* videoFile;
+static FILE* textFile;
 static FILE* logfile;
 
 #define ALIGN(x, y) (((x) + ((y) - 1)) & ~((y) - 1))
@@ -556,22 +559,46 @@ static int decode_frame(void)
 static void initiateTrigger( unsigned int timeStamp_hi, unsigned int timeStamp_lo )
 {
     struct tm * ptm;
-	triggered = 1;
-	eventDuration = 0;
+	char buffer[100];
 	
 	int backCount = 0;
+	eventTimeStamp_hi = timeStamp_hi;
+	eventTimeStamp_lo = timeStamp_lo;
 	
 	long long timelong = (long long)timeStamp_hi * 1000000 + timeStamp_lo + getEpochTimeShift();
 	time_t unixTime = timelong / 1000000;
 	
 	ptm = gmtime( &unixTime );
-	fprintf( logfile, "Trigger: 02d%02d%02d%\n", ptm->tm_hour, ptm->tm_min, ptm->tm_sec );
+	fprintf( logfile, "Trigger: %04d%02d%02d_%02d%02d%02d\n", 
+	                  ptm->tm_year+1900, ptm->tm_mon+1, ptm->tm_mday,
+	                  ptm->tm_hour, ptm->tm_min, ptm->tm_sec );
+	                  
+	sprintf( buffer, "s%04d%02d%02d_%02d%02d%02d.h264",
+	                  ptm->tm_year+1900, ptm->tm_mon+1, ptm->tm_mday,
+	                  ptm->tm_hour, ptm->tm_min, ptm->tm_sec );	
+	                  
+	videoFile = fopen( buffer, "w" );
+	if ( videoFile == 0 )
+		return;
+		
+	sprintf( buffer, "s%04d%02d%02d_%02d%02d%02d.txt",
+	                  ptm->tm_year+1900, ptm->tm_mon+1, ptm->tm_mday,
+	                  ptm->tm_hour, ptm->tm_min, ptm->tm_sec );	
+
+	textFile = fopen( buffer, "w" );
+	if ( textFile == 0 )
+		return;
+		
+	triggered = 1;
+	eventDuration = 0;
 	
 	int sumIndex = (nextSumIndex + FRAMES_TO_KEEP - 1) % FRAMES_TO_KEEP;
 	int frameIndex = (nextFrameIndex + FRAMES_TO_KEEP - 1) % FRAMES_TO_KEEP;
 	
 	while ( frameTimestamps[frameIndex] != timeStamp_lo && backCount++ < 30 )
 		frameIndex = (frameIndex + FRAMES_TO_KEEP - 1) % FRAMES_TO_KEEP;
+
+	int eventFrameIndex = frameIndex;
 		
 	while ( backCount++ < 30 || !IsIDR( frameBuffers[frameIndex], frameSizes[frameIndex] ) )
 	{
@@ -582,12 +609,65 @@ static void initiateTrigger( unsigned int timeStamp_hi, unsigned int timeStamp_l
 			break;
 	}
 	
+	while ( frameIndex != eventFrameIndex )
+	{
+		double delta = 1.0e-6 * ((int)frameTimestamps[frameIndex] - (int)timeStamp_lo);
+		int counts = sumCounts[sumIndex];
+		int sum = sumBuffers[sumIndex];
+		double xCentroid = (sum == 0) ? 0.0 : xSumBuffers[sumIndex]/sum;
+		double yCentroid = (sum == 0) ? 0.0 : ySumBuffers[sumIndex]/sum;	
+		fprintf( textFile, "%7.3f %6d %6d %7.1f %7.1f\n",
+		         delta, counts, sum, xCentroid, yCentroid );	
+		
+		fwrite(frameBuffers[frameIndex], frameSizes[frameIndex], 1, videoFile );
+		frameIndex = (frameIndex + 1) % FRAMES_TO_KEEP;
+		sumIndex = (sumIndex + 1) % FRAMES_TO_KEEP;
+	}
+	
+	double delta = 1.0e-6 * ((int)frameTimestamps[frameIndex] - (int)timeStamp_lo);
+	int counts = sumCounts[sumIndex];
+	int sum = sumBuffers[sumIndex];
+	double xCentroid = (sum == 0) ? 0.0 : xSumBuffers[sumIndex]/sum;
+	double yCentroid = (sum == 0) ? 0.0 : ySumBuffers[sumIndex]/sum;	
+	fprintf( textFile, "%7.3f %6d %6d %7.1f %7.1f\n",
+		     delta, counts, sum, xCentroid, yCentroid );
+		     	
+	fwrite( frameBuffers[frameIndex], frameSizes[frameIndex], 1, videoFile );
+	
 	printf( "Triggered %d\n", unixTime );
+}
+
+static void continueTrigger( unsigned int timeStamp_lo )
+{
+	if ( videoFile == 0 || textFile == 0 )
+		return;
+		
+	int backCount = 0;
+
+	int sumIndex = (nextSumIndex + FRAMES_TO_KEEP - 1) % FRAMES_TO_KEEP;
+	int frameIndex = (nextFrameIndex + FRAMES_TO_KEEP - 1) % FRAMES_TO_KEEP;
+	
+	while ( frameTimestamps[frameIndex] != timeStamp_lo && backCount++ < 30 )
+		frameIndex = (frameIndex + FRAMES_TO_KEEP - 1) % FRAMES_TO_KEEP;
+		
+	double delta = 1.0e-6 * ((int)timeStamp_lo - (int)eventTimeStamp_lo);
+	int counts = sumCounts[sumIndex];
+	int sum = sumBuffers[sumIndex];
+	double xCentroid = (sum == 0) ? 0.0 : xSumBuffers[sumIndex]/sum;
+	double yCentroid = (sum == 0) ? 0.0 : ySumBuffers[sumIndex]/sum;	
+	fprintf( textFile, "%7.3f %6d %6d %7.1f %7.1f\n",
+		     delta, counts, sum, xCentroid, yCentroid );	
+
+	fwrite( frameBuffers[frameIndex], frameSizes[frameIndex], 1, videoFile );
 }
 
 static void terminateTrigger(void)
 {
 	triggered = 0;
+	if ( videoFile )
+		fclose( videoFile );
+	if ( textFile )
+		fclose( textFile );
 	
 	printf( "Untriggered\n" );
 }
@@ -608,6 +688,8 @@ static void processTrigger( int sum, unsigned int timeStamp_hi, unsigned int tim
 	else
 	{
 		++eventDuration;
+		
+		continueTrigger( timeStamp_lo );
 		
 		if ( eventDuration > 60 && sum < sumThreshold )
 		{
@@ -912,7 +994,8 @@ static void init_sentinel(void)
 	untriggerCounter = 0;
 	sumThreshold = 1000;
 	eventDuration = 0;
-	eventFile = 0;
+	videoFile = 0;
+	textFile = 0;
 }
 
 static void uninit_decoder(void)
