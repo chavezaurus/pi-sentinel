@@ -73,6 +73,7 @@ static int sumCounts[FRAMES_TO_KEEP];
 static int nextSumIndex;
 
 static int triggered;
+static int untriggered;
 static int triggerCounter;
 static int untriggerCounter;
 static int sumThreshold;
@@ -590,6 +591,7 @@ static void initiateTrigger( unsigned int timeStamp_hi, unsigned int timeStamp_l
 		return;
 		
 	triggered = 1;
+	untriggered = 0;
 	eventDuration = 0;
 	
 	int sumIndex = (nextSumIndex + FRAMES_TO_KEEP - 1) % FRAMES_TO_KEEP;
@@ -598,9 +600,9 @@ static void initiateTrigger( unsigned int timeStamp_hi, unsigned int timeStamp_l
 	while ( frameTimestamps[frameIndex] != timeStamp_lo && backCount++ < 30 )
 		frameIndex = (frameIndex + FRAMES_TO_KEEP - 1) % FRAMES_TO_KEEP;
 
-	int eventFrameIndex = frameIndex;
+	int eventFrameStop = (frameIndex + 1) % FRAMES_TO_KEEP;
 		
-	while ( backCount++ < 30 || !IsIDR( frameBuffers[frameIndex], frameSizes[frameIndex] ) )
+	while ( backCount++ < 15 || !IsIDR( frameBuffers[frameIndex], frameSizes[frameIndex] ) )
 	{
 		frameIndex = (frameIndex + FRAMES_TO_KEEP - 1) % FRAMES_TO_KEEP;
 		sumIndex = (sumIndex + FRAMES_TO_KEEP - 1) % FRAMES_TO_KEEP;
@@ -609,7 +611,7 @@ static void initiateTrigger( unsigned int timeStamp_hi, unsigned int timeStamp_l
 			break;
 	}
 	
-	while ( frameIndex != eventFrameIndex )
+	while ( frameIndex != eventFrameStop )
 	{
 		double delta = 1.0e-6 * ((int)frameTimestamps[frameIndex] - (int)timeStamp_lo);
 		int counts = sumCounts[sumIndex];
@@ -623,17 +625,7 @@ static void initiateTrigger( unsigned int timeStamp_hi, unsigned int timeStamp_l
 		frameIndex = (frameIndex + 1) % FRAMES_TO_KEEP;
 		sumIndex = (sumIndex + 1) % FRAMES_TO_KEEP;
 	}
-	
-	double delta = 1.0e-6 * ((int)frameTimestamps[frameIndex] - (int)timeStamp_lo);
-	int counts = sumCounts[sumIndex];
-	int sum = sumBuffers[sumIndex];
-	double xCentroid = (sum == 0) ? 0.0 : xSumBuffers[sumIndex]/sum;
-	double yCentroid = (sum == 0) ? 0.0 : ySumBuffers[sumIndex]/sum;	
-	fprintf( textFile, "%7.3f %6d %6d %7.1f %7.1f\n",
-		     delta, counts, sum, xCentroid, yCentroid );
-		     	
-	fwrite( frameBuffers[frameIndex], frameSizes[frameIndex], 1, videoFile );
-	
+		
 	printf( "Triggered %d\n", unixTime );
 }
 
@@ -664,10 +656,15 @@ static void continueTrigger( unsigned int timeStamp_lo )
 static void terminateTrigger(void)
 {
 	triggered = 0;
+	untriggered = 0;
+	
 	if ( videoFile )
 		fclose( videoFile );
 	if ( textFile )
 		fclose( textFile );
+		
+	// Temporarily de-sensitize
+	memset( referenceFrame, 0xff, 1920*1080/9 );
 	
 	printf( "Untriggered\n" );
 }
@@ -685,6 +682,25 @@ static void processTrigger( int sum, unsigned int timeStamp_hi, unsigned int tim
 		else
 			triggerCounter = 0;
 	}
+	else if ( triggered != 0 && untriggered == 0 )
+	{
+		++eventDuration;
+		
+		continueTrigger( timeStamp_lo );
+		
+		if ( sum < sumThreshold )
+		{
+			++untriggerCounter;
+			if ( untriggerCounter >= 2 )
+				untriggered = 1;
+		}
+		else
+		{
+			untriggerCounter = 0;
+			if ( eventDuration > 150 )
+				terminateTrigger();
+		}
+	}
 	else
 	{
 		++eventDuration;
@@ -694,12 +710,11 @@ static void processTrigger( int sum, unsigned int timeStamp_hi, unsigned int tim
 		if ( eventDuration > 60 && sum < sumThreshold )
 		{
 			++untriggerCounter;
-			if ( untriggerCounter >= 2 )
+			if ( untriggerCounter >= 15 )
 				terminateTrigger();
 		}
 		else
 		{
-			untriggerCounter = 0;
 			if ( eventDuration > 150 )
 				terminateTrigger();
 		}
@@ -990,6 +1005,7 @@ static void init_sentinel(void)
 	nextFrameIndex = 0;
 	nextSumIndex = 0;
 	triggered = 0;
+	untriggered = 0;
 	triggerCounter = 0;
 	untriggerCounter = 0;
 	sumThreshold = 1000;
@@ -1016,6 +1032,63 @@ static void uninit_decoder(void)
 		fprintf(stderr, "Cannot uninit decoder: %d, %s\n",
 		        errno, strerror(errno));
 		exit(EXIT_FAILURE);
+	}
+}
+
+static void readMask(void)
+{
+	char buffer[100];
+	
+	FILE* file = fopen( "mask.ppm", "rb" );
+	if ( file == 0 )
+		return;
+	
+	int width;
+	int height;
+	int maxval;
+	
+	int count = fscanf( file, "%s ", buffer );
+	if ( count != 1 || buffer[0] != 'P' || buffer[1] != '6' )
+	{
+		fprintf(stderr, "Cannot read mask file, not a PPM file.\n" );
+		exit(EXIT_FAILURE);
+	}
+	
+	int c = fgetc(file);
+	if ( c == '#' )
+		fgets( buffer, 99, file );
+	else
+		ungetc( c, file );
+	
+	count = fscanf( file, " %d %d %d ", &width, &height, &maxval );
+	if ( count != 3 )
+	{
+		fprintf(stderr, "Cannot read mask file, header format error.\n" );
+		exit(EXIT_FAILURE);
+	}
+		
+	if ( width != 640 || height != 360 )
+	{
+		fprintf(stderr, "Wrong size mask file: %d %d\n", width, height );
+		exit(EXIT_FAILURE);
+	}
+	
+	if ( maxval != 255 )
+	{
+		fprintf(stderr, "Wrong max pixel value: %d\n", maxval );
+		exit(EXIT_FAILURE);
+	}
+	
+	for ( int i = 0; i < 640*360; ++i )
+	{
+		int r = fgetc(file);
+		int g = fgetc(file);
+		int b = fgetc(file);
+		
+		if ( r > 250 && g < 10 && b < 10 )
+			maskFrame[i] = 255;
+		else
+			maskFrame[i] = 50;
 	}
 }
 
@@ -1067,6 +1140,7 @@ int main(int argc, char **argv)
 	init_device();
 	init_decoder();
 	init_sentinel();
+	readMask();
 	start_capturing();
 	FillBufferDone( decoderHandle, NULL, NULL );
 	decodeLoop();
