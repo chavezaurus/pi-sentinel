@@ -104,30 +104,19 @@ static int xioctl(int fh, int request, void *arg)
 	return r;
 }
 
-static void process_image(const void *p, int size)
+static void save_image(const void *p, int size)
 {
-  char buffer[100];
-  
-  int status;
-    frame_number++;
-
     if (out_buf==0)
     {
-		sprintf( buffer, "video%03d.jpeg", frame_number );
         /* write to file */
-        FILE *fp=fopen("video.raw","ab");
-//      FILE *fp=fopen("video.jpeg","ab");
-//      FILE *fp=fopen( buffer, "wb");
+        FILE *fp=fopen("image.jpeg","wb");
         fwrite(p, size, 1, fp);
         fflush(fp);
         fclose(fp);
     }
     else
     {
-        /* write to stdout */
-      status = write(1, p, size);
-      if(status == -1)
-	perror("write");
+		perror("write");
     }
 }
 
@@ -195,15 +184,8 @@ static int read_frame(void)
 	}
 
 	assert(buf.index < n_buffers);
-	int isIDR = IsIDR( buffers[buf.index].start, buf.bytesused );
 	
-	/*
-    printf( "%6d %6d %6d.%06d %6d %6d\n", 
-            buf.sequence, buf.index, buf.timestamp.tv_sec, buf.timestamp.tv_usec,
-            buf.bytesused, isIDR );
-            */
-            
-	process_image(buffers[buf.index].start, buf.bytesused);
+	save_image(buffers[buf.index].start, buf.bytesused);
 
 	if (-1 == xioctl(fd, VIDIOC_QBUF, &buf))
 		errno_exit("VIDIOC_QBUF");
@@ -354,7 +336,7 @@ static void init_mmap(void)
 	}
 }
 
-static void init_device(void)
+static void init_device(int jpeg)
 {
 	struct v4l2_capability cap;
 	struct v4l2_cropcap cropcap;
@@ -386,7 +368,6 @@ static void init_device(void)
 
 	/* Select video input, video standard and tune here. */
 
-
 	CLEAR(cropcap);
 
 	cropcap.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
@@ -409,15 +390,13 @@ static void init_device(void)
 		/* Errors ignored. */
 	}
 
-
 	CLEAR(fmt);
 
 	fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 	
     fmt.fmt.pix.width       = 1920;     
     fmt.fmt.pix.height      = 1080;  
- 	fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_H264;
-// 	fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_MJPEG;
+ 	fmt.fmt.pix.pixelformat = jpeg ? V4L2_PIX_FMT_MJPEG : V4L2_PIX_FMT_H264;
     fmt.fmt.pix.field       = V4L2_FIELD_NONE;
 
 	if (-1 == xioctl(fd, VIDIOC_S_FMT, &fmt))
@@ -1099,57 +1078,101 @@ static void usage(FILE *fp, int argc, char **argv)
 	        "Version 1.3\n"
 	        "Options:\n"
 	        "-d | --device name   Video device name [%s]\n"
+	        "-j | --jpeg          Output single jpeg image\n"
 	        "-h | --help          Print this message\n"
-	        "-m | --mmap          Use memory mapped buffers [default]\n"
-	        "-r | --read          Use read() calls\n"
-	        "-u | --userp         Use application allocated buffers\n"
-	        "-o | --output        Outputs stream to stdout\n"
-                 "-f | --format        Force format to 640x480 YUYV\n"
-		 "-F | --formatH264    Force format to 1920x1080 H264\n"
-                 "-c | --count         Number of frames to grab [%i] - use 0 for infinite\n"
-                 "\n"
-		 "Example usage: capture -F -o -c 300 > output.raw\n"
-		 "Captures 300 frames of H264 at 1920x1080 - use raw2mpg4 script to convert to mpg4\n",
+            "-c | --count         Number of frames to grab [%i] - use 0 for infinite\n"
+            "\n"
+			"Example usage: sentinel -j -d /dev/video0\n",
 	        argv[0], dev_name, frame_count);
 }
 
-static const char short_options[] = "d:hmruofFc:";
+static const char short_options[] = "d:jc:";
 
 static const struct option
         long_options[] = {
 	{ "device", required_argument, NULL, 'd' },
+	{ "jpeg",   no_argument,       NULL, 'j' },
 	{ "help",   no_argument,       NULL, 'h' },
-	{ "mmap",   no_argument,       NULL, 'm' },
-	{ "read",   no_argument,       NULL, 'r' },
-	{ "userp",  no_argument,       NULL, 'u' },
-	{ "output", no_argument,       NULL, 'o' },
-	{ "format", no_argument,       NULL, 'f' },
-	{ "formatH264", no_argument,   NULL, 'F' },
 	{ "count",  required_argument, NULL, 'c' },
 	{ 0, 0, 0, 0 }
 };
 
 int main(int argc, char **argv)
 {
-	logfile = fopen( "logfile.txt", "w" );
+	int getJpeg = 0;
 	dev_name = "/dev/video1";
-//	dev_name = "/dev/video0";
-    bcm_host_init();
+	
+	for (;; ) {
+		int idx;
+		int c;
 
+		c = getopt_long(argc, argv,
+		                short_options, long_options, &idx);
+
+		if (-1 == c)
+			break;
+
+		switch (c) {
+		case 0: /* getopt_long() flag */
+			break;
+
+		case 'd':
+			dev_name = optarg;
+			break;
+
+		case 'h':
+			usage(stdout, argc, argv);
+			exit(EXIT_SUCCESS);
+			
+		case 'j':
+			getJpeg = 1;
+			break;
+
+		case 'c':
+			errno = 0;
+			frame_count = strtol(optarg, NULL, 0);
+			if (errno)
+				errno_exit(optarg);
+			break;
+
+		default:
+			usage(stderr, argc, argv);
+			exit(EXIT_FAILURE);
+		}
+	}
+
+    if ( getJpeg )
+    {
+		frame_count = 1;
+		open_device();
+		init_device( 1 );
+		start_capturing();
+		mainloop();
+		stop_capturing();
+		uninit_device();
+		close_device();
+		return 0;
+	}
+
+	logfile = fopen( "logfile.txt", "w" );
+    bcm_host_init();
+    
 	open_device();
-	init_device();
+	init_device(0);
 	init_decoder();
 	init_sentinel();
 	readMask();
 	start_capturing();
-	FillBufferDone( decoderHandle, NULL, NULL );
 	decodeLoop();
-	// mainloop();
 	stop_capturing();
 	uninit_decoder();
 	uninit_device();
 	close_device();
 	fclose( logfile );
 	fprintf(stderr, "\n");
+	
+	if ( logfile != 0 )
+		fclose( logfile );
+		
 	return 0;
 }
