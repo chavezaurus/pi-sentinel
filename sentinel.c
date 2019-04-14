@@ -47,12 +47,14 @@ static OMX_BUFFERHEADERTYPE *pingBuffer;
 static OMX_BUFFERHEADERTYPE *pongBuffer;
 static OMX_BUFFERHEADERTYPE *outputBuffer;
 
-
+static char            *composeBuffer;
 static char            *dev_name;
+static char            *h264_name;
 static int fd = -1;
 struct buffer          *buffers;
 static unsigned int n_buffers;
 static int out_buf;
+static int decodeBufferFull;
 //static int frame_count = 1;
 static int frame_count = 300;
 static int frame_number = 0;
@@ -819,6 +821,8 @@ FillBufferDone (OMX_HANDLETYPE omx_handle, OMX_PTR app_data, OMX_BUFFERHEADERTYP
 static OMX_ERRORTYPE
 EmptyBufferDone (OMX_HANDLETYPE omx_handle, OMX_PTR app_data, OMX_BUFFERHEADERTYPE *omx_buffer)
 {
+	decodeBufferFull = 0;
+	
 	return OMX_ErrorNone;
 }
 
@@ -1071,6 +1075,96 @@ static void readMask(void)
 	}
 }
 
+static void ProcessComposeBuffer(void)
+{
+	if ( outputBuffer == 0 )
+		return;
+		
+	OMX_ERRORTYPE error;
+
+	OMX_BUFFERHEADERTYPE* workingBuffer = outputBuffer;
+	outputBuffer = 0;
+	
+    error = OMX_FillThisBuffer( decoderHandle, 
+                                (workingBuffer == pingBuffer) ?  pongBuffer : pingBuffer );
+            
+	if (error != OMX_ErrorNone) {
+		fprintf(stderr, "FillThisBuffer failed: %d, %s\n",
+		        errno, strerror(errno));
+		exit(EXIT_FAILURE);
+	}
+	
+	for ( int iy = 0; iy < 1080; ++iy )
+	{
+		for ( int ix = 0; ix < 1920; ++ix )
+		{
+			int indexY = 1920*iy + ix;
+			int indexU = 1920*1080 + 960*(iy/2) + (ix/2);
+			int indexV = indexU + 960*540;
+			
+			if ( (const char)workingBuffer->pBuffer[indexY] >= composeBuffer[indexY] )
+			{
+				composeBuffer[indexY] = workingBuffer->pBuffer[indexY];
+				composeBuffer[indexU] = workingBuffer->pBuffer[indexU];
+				composeBuffer[indexV] = workingBuffer->pBuffer[indexV];
+			}
+		}
+	}
+}
+
+static void composeLoop(void)
+{
+	OMX_ERRORTYPE error = OMX_ErrorNone;
+	const char* buffer[4096];
+	
+	FILE* file = fopen( h264_name, "rb" );
+	if ( file == 0 )
+		return;
+		
+	composeBuffer = (char *)malloc( 1920 * 1080 * 3 / 2 );
+	memset( composeBuffer, 0, 1920*1080*3/2);
+	
+	int count = fread( buffer, 1, 4096, file );
+	
+	decoderBuffer->pBuffer = (void *)buffer;
+	decoderBuffer->nAllocLen = 4096;
+	decoderBuffer->nOffset = 0;
+	decoderBuffer->nInputPortIndex = 130;
+	
+	while ( count > 0 )
+	{
+		decodeBufferFull = 1;
+
+		decoderBuffer->nFilledLen = count;
+		error = OMX_EmptyThisBuffer( decoderHandle, decoderBuffer );
+
+		if (error != OMX_ErrorNone) {
+			fprintf(stderr, "Cannot EmptyThisBuffer: %d, %s\n",
+					errno, strerror(errno));
+			exit(EXIT_FAILURE);
+		}
+		
+		ProcessComposeBuffer();
+		while ( decodeBufferFull )	
+		{		
+			usleep( 10000 );
+			ProcessComposeBuffer();
+		}
+		
+		count = fread( buffer, 1, 4096, file );
+	}
+	
+	fclose( file );
+	
+	FILE* fraw = fopen( "composed.raw", "wb" );
+	if ( fraw == 0 )
+		return;
+		
+	fwrite( composeBuffer, 1, 1920*1080*3/2, fraw );
+	fclose(fraw);
+	free( composeBuffer );
+}
+
 static void usage(FILE *fp, int argc, char **argv)
 {
 	fprintf(fp,
@@ -1078,19 +1172,21 @@ static void usage(FILE *fp, int argc, char **argv)
 	        "Version 1.3\n"
 	        "Options:\n"
 	        "-d | --device name   Video device name [%s]\n"
+	        "-p | --compose file  H264 file name [%s]\n"
 	        "-j | --jpeg          Output single jpeg image\n"
 	        "-h | --help          Print this message\n"
             "-c | --count         Number of frames to grab [%i] - use 0 for infinite\n"
             "\n"
 			"Example usage: sentinel -j -d /dev/video0\n",
-	        argv[0], dev_name, frame_count);
+	        argv[0], dev_name, h264_name, frame_count);
 }
 
-static const char short_options[] = "d:jc:";
+static const char short_options[] = "d:p:jc:";
 
 static const struct option
         long_options[] = {
 	{ "device", required_argument, NULL, 'd' },
+	{ "compose",required_argument, NULL, 'p' },
 	{ "jpeg",   no_argument,       NULL, 'j' },
 	{ "help",   no_argument,       NULL, 'h' },
 	{ "count",  required_argument, NULL, 'c' },
@@ -1100,7 +1196,10 @@ static const struct option
 int main(int argc, char **argv)
 {
 	int getJpeg = 0;
+	int composeH264 = 0;
+	
 	dev_name = "/dev/video1";
+	h264_name = "video.h264";
 	
 	for (;; ) {
 		int idx;
@@ -1118,6 +1217,11 @@ int main(int argc, char **argv)
 
 		case 'd':
 			dev_name = optarg;
+			break;
+			
+		case 'p':
+			composeH264 = 1;
+			h264_name = optarg;
 			break;
 
 		case 'h':
@@ -1151,6 +1255,17 @@ int main(int argc, char **argv)
 		stop_capturing();
 		uninit_device();
 		close_device();
+		return 0;
+	}
+	
+	if ( composeH264 )
+	{
+		bcm_host_init();
+    
+		init_decoder();
+		composeLoop();
+		uninit_decoder();
+		
 		return 0;
 	}
 
