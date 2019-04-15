@@ -1099,8 +1099,8 @@ static void ProcessComposeBuffer(void)
 		for ( int ix = 0; ix < 1920; ++ix )
 		{
 			int indexY = 1920*iy + ix;
-			int indexU = 1920*1080 + 960*(iy/2) + (ix/2);
-			int indexV = indexU + 960*540;
+			int indexU = 1920*1088 + 960*(iy/2) + (ix/2);
+			int indexV = indexU + 1920*1088/4;
 			
 			if ( (const char)workingBuffer->pBuffer[indexY] >= composeBuffer[indexY] )
 			{
@@ -1121,8 +1121,8 @@ static void composeLoop(void)
 	if ( file == 0 )
 		return;
 		
-	composeBuffer = (char *)malloc( 1920 * 1080 * 3 / 2 );
-	memset( composeBuffer, 0, 1920*1080*3/2);
+	composeBuffer = (char *)malloc( 1920 * 1088 * 3 / 2 );
+	memset( composeBuffer, 0, 1920*1088*3/2);
 	
 	int count = fread( buffer, 1, 4096, file );
 	
@@ -1147,7 +1147,7 @@ static void composeLoop(void)
 		ProcessComposeBuffer();
 		while ( decodeBufferFull )	
 		{		
-			usleep( 10000 );
+			usleep( 5000 );
 			ProcessComposeBuffer();
 		}
 		
@@ -1160,7 +1160,9 @@ static void composeLoop(void)
 	if ( fraw == 0 )
 		return;
 		
-	fwrite( composeBuffer, 1, 1920*1080*3/2, fraw );
+	fwrite( composeBuffer, 1, 1920*1080, fraw );
+	fwrite( composeBuffer+1920*1088, 1, 1920*1080/4, fraw );
+	fwrite( composeBuffer+1920*1088+1920*1088/4, 1, 1920*1080/4, fraw );
 	fclose(fraw);
 	free( composeBuffer );
 }
