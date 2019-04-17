@@ -56,7 +56,7 @@ static unsigned int n_buffers;
 static int out_buf;
 static int decodeBufferFull;
 //static int frame_count = 1;
-static int frame_count = 300;
+static int frame_count = 600;
 static int frame_number = 0;
 static long toEpochOffset_us;
 static unsigned char* testFrame;
@@ -188,6 +188,7 @@ static int read_frame(void)
 	assert(buf.index < n_buffers);
 	
 	save_image(buffers[buf.index].start, buf.bytesused);
+	fprintf( logfile, "Time(s): %d.%03d\n", buf.timestamp.tv_sec, buf.timestamp.tv_usec/1000 );
 
 	if (-1 == xioctl(fd, VIDIOC_QBUF, &buf))
 		errno_exit("VIDIOC_QBUF");
@@ -503,10 +504,12 @@ static int decode_frame(void)
 		}
 	}
 
+	/*
     FILE *fp=fopen("video.raw","ab");
     fwrite(buffers[buf.index].start, buf.bytesused, 1, fp);
     fflush(fp);
     fclose(fp);
+    */
 
 	long long timeStamp_us = 1000000 * (long long) buf.timestamp.tv_sec + buf.timestamp.tv_usec;
 	unsigned int timeStamp_hi = timeStamp_us >> 32;
@@ -1102,7 +1105,7 @@ static void ProcessComposeBuffer(void)
 			int indexU = 1920*1088 + 960*(iy/2) + (ix/2);
 			int indexV = indexU + 1920*1088/4;
 			
-			if ( (const char)workingBuffer->pBuffer[indexY] >= composeBuffer[indexY] )
+			if ( (const char)workingBuffer->pBuffer[indexY] > composeBuffer[indexY] )
 			{
 				composeBuffer[indexY] = workingBuffer->pBuffer[indexY];
 				composeBuffer[indexU] = workingBuffer->pBuffer[indexU];
@@ -1176,6 +1179,7 @@ static void usage(FILE *fp, int argc, char **argv)
 	        "-d | --device name   Video device name [%s]\n"
 	        "-p | --compose file  H264 file name [%s]\n"
 	        "-j | --jpeg          Output single jpeg image\n"
+	        "-m | --mpeg          Get MPEG video\n"
 	        "-h | --help          Print this message\n"
             "-c | --count         Number of frames to grab [%i] - use 0 for infinite\n"
             "\n"
@@ -1183,13 +1187,14 @@ static void usage(FILE *fp, int argc, char **argv)
 	        argv[0], dev_name, h264_name, frame_count);
 }
 
-static const char short_options[] = "d:p:jc:";
+static const char short_options[] = "d:p:jmc:";
 
 static const struct option
         long_options[] = {
 	{ "device", required_argument, NULL, 'd' },
 	{ "compose",required_argument, NULL, 'p' },
 	{ "jpeg",   no_argument,       NULL, 'j' },
+	{ "mpeg",   no_argument,       NULL, 'm' },
 	{ "help",   no_argument,       NULL, 'h' },
 	{ "count",  required_argument, NULL, 'c' },
 	{ 0, 0, 0, 0 }
@@ -1198,6 +1203,7 @@ static const struct option
 int main(int argc, char **argv)
 {
 	int getJpeg = 0;
+	int getMpeg = 0;
 	int composeH264 = 0;
 	
 	dev_name = "/dev/video1";
@@ -1231,7 +1237,13 @@ int main(int argc, char **argv)
 			exit(EXIT_SUCCESS);
 			
 		case 'j':
+			dev_name = "/dev/video0";
 			getJpeg = 1;
+			break;
+
+		case 'm':
+			dev_name = "/dev/video0";
+			getMpeg = 1;
 			break;
 
 		case 'c':
@@ -1249,6 +1261,7 @@ int main(int argc, char **argv)
 
     if ( getJpeg )
     {
+		logfile = fopen( "logfile.txt", "w" );
 		frame_count = 1;
 		open_device();
 		init_device( 1 );
@@ -1257,6 +1270,25 @@ int main(int argc, char **argv)
 		stop_capturing();
 		uninit_device();
 		close_device();
+		if ( logfile != 0 )
+			fclose( logfile );
+
+		return 0;
+	}
+	
+    if ( getMpeg )
+    {
+		logfile = fopen( "logfile.txt", "w" );
+		open_device();
+		init_device( 1 );
+		start_capturing();
+		mainloop();
+		stop_capturing();
+		uninit_device();
+		close_device();
+		if ( logfile != 0 )
+			fclose( logfile );
+			
 		return 0;
 	}
 	
@@ -1285,7 +1317,6 @@ int main(int argc, char **argv)
 	uninit_decoder();
 	uninit_device();
 	close_device();
-	fclose( logfile );
 	fprintf(stderr, "\n");
 	
 	if ( logfile != 0 )
