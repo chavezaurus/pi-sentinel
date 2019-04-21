@@ -16,6 +16,7 @@
 
 #include <fcntl.h>              /* low-level i/o */
 #include <unistd.h>
+#include <pthread.h>
 #include <errno.h>
 #include <math.h>
 #include <sys/stat.h>
@@ -29,7 +30,7 @@
 #include "IL/OMX_Broadcom.h"
 
 #define CLEAR(x) memset(&(x), 0, sizeof(x))
-#define FRAMES_TO_KEEP 100
+#define FRAMES_TO_KEEP 300
 
 #ifndef V4L2_PIX_FMT_H264
 #define V4L2_PIX_FMT_H264     v4l2_fourcc('H', '2', '6', '4') /* H264 with start codes */
@@ -56,7 +57,7 @@ static unsigned int n_buffers;
 static int out_buf;
 static int decodeBufferFull;
 //static int frame_count = 1;
-static int frame_count = 600;
+static int frame_count = 300;
 static int frame_number = 0;
 static long toEpochOffset_us;
 static unsigned char* testFrame;
@@ -67,12 +68,16 @@ static unsigned char* frameBuffers[FRAMES_TO_KEEP];
 static int frameSizes[FRAMES_TO_KEEP];
 static int frameTimestamps[FRAMES_TO_KEEP];
 static int nextFrameIndex;
+static int eventFrameIndex;
+static int eventFrameStop;
 
 static int sumBuffers[FRAMES_TO_KEEP];
 static int xSumBuffers[FRAMES_TO_KEEP];
 static int ySumBuffers[FRAMES_TO_KEEP];
 static int sumCounts[FRAMES_TO_KEEP];
+static int sumTimestamps[FRAMES_TO_KEEP];
 static int nextSumIndex;
+static int eventSumIndex;
 
 static int triggered;
 static int untriggered;
@@ -87,7 +92,20 @@ static FILE* videoFile;
 static FILE* textFile;
 static FILE* logfile;
 
+static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t condition = PTHREAD_COND_INITIALIZER;
+static pthread_t thread_id;
+
 #define ALIGN(x, y) (((x) + ((y) - 1)) & ~((y) - 1))
+
+struct ThreadArguments
+{
+	int eventStartTimeHi;
+	int eventStartTimeLo;
+	int eventStopTimeHi;
+	int eventStopTimeLo;
+	int jobPending;
+} threadingJob;
 
 static void errno_exit(const char *s)
 {
@@ -345,6 +363,9 @@ static void init_device(int jpeg)
 	struct v4l2_cropcap cropcap;
 	struct v4l2_crop crop;
 	struct v4l2_format fmt;
+	struct v4l2_control control;
+	struct v4l2_queryctrl queryctrl;
+	
 	unsigned int min;
 
 	if (-1 == xioctl(fd, VIDIOC_QUERYCAP, &cap)) {
@@ -412,7 +433,7 @@ static void init_device(int jpeg)
 	min = fmt.fmt.pix.bytesperline * fmt.fmt.pix.height;
 	if (fmt.fmt.pix.sizeimage < min)
 		fmt.fmt.pix.sizeimage = min;
-
+		
 	init_mmap();
 }
 
@@ -541,28 +562,74 @@ static int decode_frame(void)
 
 	return 1;
 }
-static void initiateTrigger( unsigned int timeStamp_hi, unsigned int timeStamp_lo )
+
+/*
+static void saveEvent(void)
 {
+	if ( videoFile == 0 || textFile == 0 )
+		return;
+		
+	if ( eventFrameIndex != eventFrameStop )
+	{
+		double delta = 1.0e-6 * ((int)frameTimestamps[eventFrameIndex] - (int)eventTimeStamp_lo);
+		int counts = sumCounts[eventSumIndex];
+		int sum = sumBuffers[eventSumIndex];
+		double xCentroid = (sum == 0) ? 0.0 : xSumBuffers[eventSumIndex]/sum;
+		double yCentroid = (sum == 0) ? 0.0 : ySumBuffers[eventSumIndex]/sum;	
+		// fprintf( textFile, "%7.3f %6d %6d %7.1f %7.1f\n",
+		//           delta, counts, sum, xCentroid, yCentroid );	
+		
+		// fwrite(frameBuffers[eventFrameIndex], frameSizes[eventFrameIndex], 1, videoFile );
+		eventFrameIndex = (eventFrameIndex + 1) % FRAMES_TO_KEEP;
+		eventSumIndex = (eventSumIndex + 1) % FRAMES_TO_KEEP;
+	}
+	
+	if ( eventFrameIndex == eventFrameStop && !triggered && !untriggered )
+	{
+		fclose( videoFile );
+		fclose( textFile );
+		
+		videoFile = 0;
+		textFile = 0;
+	}
+}
+*/
+
+static void saveEventJob(void)
+{
+	struct ThreadArguments arg = threadingJob;
+	
     struct tm * ptm;
 	char buffer[100];
 	
-	int backCount = 0;
-	eventTimeStamp_hi = timeStamp_hi;
-	eventTimeStamp_lo = timeStamp_lo;
+	int frameIndex = -1;
+	int sumIndex   = -1;
+	int stopIndex  = -1;
 	
-	long long timelong = (long long)timeStamp_hi * 1000000 + timeStamp_lo + getEpochTimeShift();
+	for ( int i = 0; i < FRAMES_TO_KEEP; ++i )
+	{
+		if ( sumTimestamps[i] == arg.eventStartTimeLo )
+			sumIndex = i;
+		if ( frameTimestamps[i] == arg.eventStartTimeLo )
+			frameIndex = i;
+		if ( sumTimestamps[i] == arg.eventStopTimeLo )
+			stopIndex = i;
+	}
+	
+	if ( frameIndex == -1 || sumIndex == -1 || stopIndex == -1 )
+		return;
+	
+	long long timelong = (long long)arg.eventStartTimeHi * 1000000 + arg.eventStartTimeLo + getEpochTimeShift();
 	time_t unixTime = timelong / 1000000;
 	
 	ptm = gmtime( &unixTime );
-	fprintf( logfile, "Trigger: %04d%02d%02d_%02d%02d%02d\n", 
-	                  ptm->tm_year+1900, ptm->tm_mon+1, ptm->tm_mday,
-	                  ptm->tm_hour, ptm->tm_min, ptm->tm_sec );
-	                  
 	sprintf( buffer, "s%04d%02d%02d_%02d%02d%02d.h264",
 	                  ptm->tm_year+1900, ptm->tm_mon+1, ptm->tm_mday,
 	                  ptm->tm_hour, ptm->tm_min, ptm->tm_sec );	
+	
+	// strcpy( buffer, "stest.h264" );
 	                  
-	videoFile = fopen( buffer, "w" );
+	FILE* videoFile = fopen( buffer, "w" );
 	if ( videoFile == 0 )
 		return;
 		
@@ -570,22 +637,13 @@ static void initiateTrigger( unsigned int timeStamp_hi, unsigned int timeStamp_l
 	                  ptm->tm_year+1900, ptm->tm_mon+1, ptm->tm_mday,
 	                  ptm->tm_hour, ptm->tm_min, ptm->tm_sec );	
 
-	textFile = fopen( buffer, "w" );
+    // strcpy( buffer, "stest.txt" );
+	FILE* textFile = fopen( buffer, "w" );
 	if ( textFile == 0 )
 		return;
 		
-	triggered = 1;
-	untriggered = 0;
-	eventDuration = 0;
+	int backCount = 0;
 	
-	int sumIndex = (nextSumIndex + FRAMES_TO_KEEP - 1) % FRAMES_TO_KEEP;
-	int frameIndex = (nextFrameIndex + FRAMES_TO_KEEP - 1) % FRAMES_TO_KEEP;
-	
-	while ( frameTimestamps[frameIndex] != timeStamp_lo && backCount++ < 30 )
-		frameIndex = (frameIndex + FRAMES_TO_KEEP - 1) % FRAMES_TO_KEEP;
-
-	int eventFrameStop = (frameIndex + 1) % FRAMES_TO_KEEP;
-		
 	while ( backCount++ < 15 || !IsIDR( frameBuffers[frameIndex], frameSizes[frameIndex] ) )
 	{
 		frameIndex = (frameIndex + FRAMES_TO_KEEP - 1) % FRAMES_TO_KEEP;
@@ -595,9 +653,9 @@ static void initiateTrigger( unsigned int timeStamp_hi, unsigned int timeStamp_l
 			break;
 	}
 	
-	while ( frameIndex != eventFrameStop )
+	while ( sumIndex != stopIndex )
 	{
-		double delta = 1.0e-6 * ((int)frameTimestamps[frameIndex] - (int)timeStamp_lo);
+		double delta = 1.0e-6 * ((int)frameTimestamps[frameIndex] - (int)arg.eventStartTimeLo);
 		int counts = sumCounts[sumIndex];
 		int sum = sumBuffers[sumIndex];
 		double xCentroid = (sum == 0) ? 0.0 : xSumBuffers[sumIndex]/sum;
@@ -607,48 +665,62 @@ static void initiateTrigger( unsigned int timeStamp_hi, unsigned int timeStamp_l
 		
 		fwrite(frameBuffers[frameIndex], frameSizes[frameIndex], 1, videoFile );
 		frameIndex = (frameIndex + 1) % FRAMES_TO_KEEP;
-		sumIndex = (sumIndex + 1) % FRAMES_TO_KEEP;
+		sumIndex = (sumIndex + 1) % FRAMES_TO_KEEP;		
 	}
-		
-	printf( "Triggered %d\n", unixTime );
+	
+	fclose( videoFile );
+	fclose( textFile );
+}
+
+static void *saveEventThread(void* argin)
+{
+	for (;;)
+	{
+		pthread_mutex_lock(&mutex);
+		while ( !threadingJob.jobPending )
+			pthread_cond_wait( &condition, &mutex );
+			
+		saveEventJob();
+			
+		threadingJob.jobPending = 0;
+		pthread_mutex_unlock(&mutex);
+	}
+}
+
+static void initiateTrigger( unsigned int timeStamp_hi, unsigned int timeStamp_lo )
+{
+	eventTimeStamp_hi = timeStamp_hi;
+	eventTimeStamp_lo = timeStamp_lo;
+	
+	triggered = 1;
+	untriggered = 0;
+	eventDuration = 0;
+	
+	printf( "Triggered\n" );
 }
 
 static void continueTrigger( unsigned int timeStamp_lo )
 {
-	if ( videoFile == 0 || textFile == 0 )
-		return;
-		
-	int backCount = 0;
-
-	int sumIndex = (nextSumIndex + FRAMES_TO_KEEP - 1) % FRAMES_TO_KEEP;
-	int frameIndex = (nextFrameIndex + FRAMES_TO_KEEP - 1) % FRAMES_TO_KEEP;
-	
-	while ( frameTimestamps[frameIndex] != timeStamp_lo && backCount++ < 30 )
-		frameIndex = (frameIndex + FRAMES_TO_KEEP - 1) % FRAMES_TO_KEEP;
-		
-	double delta = 1.0e-6 * ((int)timeStamp_lo - (int)eventTimeStamp_lo);
-	int counts = sumCounts[sumIndex];
-	int sum = sumBuffers[sumIndex];
-	double xCentroid = (sum == 0) ? 0.0 : xSumBuffers[sumIndex]/sum;
-	double yCentroid = (sum == 0) ? 0.0 : ySumBuffers[sumIndex]/sum;	
-	fprintf( textFile, "%7.3f %6d %6d %7.1f %7.1f\n",
-		     delta, counts, sum, xCentroid, yCentroid );	
-
-	fwrite( frameBuffers[frameIndex], frameSizes[frameIndex], 1, videoFile );
 }
 
-static void terminateTrigger(void)
+static void terminateTrigger(unsigned int timeStamp_hi, unsigned int timeStamp_lo )
 {
 	triggered = 0;
 	untriggered = 0;
 	
-	if ( videoFile )
-		fclose( videoFile );
-	if ( textFile )
-		fclose( textFile );
-		
 	// Temporarily de-sensitize
 	memset( referenceFrame, 0xff, 1920*1080/9 );
+	
+	pthread_mutex_lock(&mutex);
+	
+	threadingJob.eventStartTimeHi = eventTimeStamp_hi;
+	threadingJob.eventStartTimeLo = eventTimeStamp_lo;
+	threadingJob.eventStopTimeHi = timeStamp_hi;
+	threadingJob.eventStopTimeLo = timeStamp_lo;
+	threadingJob.jobPending = 1;
+	
+	pthread_mutex_unlock(&mutex);
+	pthread_cond_signal(&condition);
 	
 	printf( "Untriggered\n" );
 }
@@ -682,7 +754,7 @@ static void processTrigger( int sum, unsigned int timeStamp_hi, unsigned int tim
 		{
 			untriggerCounter = 0;
 			if ( eventDuration > 150 )
-				terminateTrigger();
+				terminateTrigger(timeStamp_hi, timeStamp_lo);
 		}
 	}
 	else
@@ -695,18 +767,20 @@ static void processTrigger( int sum, unsigned int timeStamp_hi, unsigned int tim
 		{
 			++untriggerCounter;
 			if ( untriggerCounter >= 15 )
-				terminateTrigger();
+				terminateTrigger(timeStamp_hi, timeStamp_lo);
 		}
 		else
 		{
 			if ( eventDuration > 150 )
-				terminateTrigger();
+				terminateTrigger(timeStamp_hi, timeStamp_lo);
 		}
 	}
 }
 
 static void ProcessDecodedBuffer(void)
 {
+	static int countn = 0;
+	
 	if ( outputBuffer == 0 )
 		return;
 		
@@ -717,15 +791,30 @@ static void ProcessDecodedBuffer(void)
 	
 	// printf( "--->- %d %d\n", workingBuffer->nTimeStamp.nLowPart, workingBuffer->nFilledLen );
  	
+ 	int ping = workingBuffer == pingBuffer;
+ 	int pong = workingBuffer == pongBuffer;
+ 	
+ 	fprintf( logfile, "FillThisBuffer %d\n", ++countn + 1 );
+ 	
     error = OMX_FillThisBuffer( decoderHandle, 
-                                (workingBuffer == pingBuffer) ?  pongBuffer : pingBuffer );
+                                ping ?  pongBuffer : pingBuffer );
             
 	if (error != OMX_ErrorNone) {
-		fprintf(stderr, "FillThisBuffer failed: %d, %s\n",
-		        errno, strerror(errno));
+		fprintf(stderr, "FillThisBuffer failed: %d, %s, %d %d %d\n",
+		        errno, strerror(errno), ping, pong, outputBuffer!= 0 );
+		
+		if ( logfile != 0 )
+		{
+			fflush( logfile );
+			fclose( logfile );
+		}
+		
 		exit(EXIT_FAILURE);
 	}
-	
+
+	clock_t t = clock();
+	fprintf( logfile, "clock %d\n", countn );
+
 	int sum = 0;
 	int xsum = 0;
 	int ysum = 0;
@@ -742,8 +831,6 @@ static void ProcessDecodedBuffer(void)
 	unsigned char* pTest = testFrame;
 	unsigned char* pRef  = referenceFrame;
 	unsigned char* pMask = maskFrame;
-	
-	clock_t t = clock();
 	
 	while ( p < pvend )
 	{
@@ -785,7 +872,7 @@ static void ProcessDecodedBuffer(void)
 			n *= 15;
 			n += *pTest++;
 			n >>= 4;
-		
+			
 			*pRef++ = n;
 		}
 	}
@@ -794,6 +881,7 @@ static void ProcessDecodedBuffer(void)
 	xSumBuffers[nextSumIndex] = xsum;
 	ySumBuffers[nextSumIndex] = ysum;
 	sumCounts[nextSumIndex] = count;
+	sumTimestamps[nextSumIndex] = workingBuffer->nTimeStamp.nLowPart;
 	nextSumIndex = (nextSumIndex + 1) % FRAMES_TO_KEEP;
 		
 	processTrigger( sum, workingBuffer->nTimeStamp.nHighPart, workingBuffer->nTimeStamp.nLowPart );
@@ -807,6 +895,8 @@ static void ProcessDecodedBuffer(void)
 static OMX_ERRORTYPE
 FillBufferDone (OMX_HANDLETYPE omx_handle, OMX_PTR app_data, OMX_BUFFERHEADERTYPE *omx_buffer)
 {
+    static int count = 0;
+    
 	if ( omx_buffer == 0 )
 	    return OMX_ErrorNone;
 	    
@@ -818,13 +908,21 @@ FillBufferDone (OMX_HANDLETYPE omx_handle, OMX_PTR app_data, OMX_BUFFERHEADERTYP
 	
 	outputBuffer = omx_buffer;
 	
+	if ( logfile )
+		fprintf( logfile, "FillBufferDone %d\n", ++count );
+	
 	return OMX_ErrorNone;
 }
 
 static OMX_ERRORTYPE
 EmptyBufferDone (OMX_HANDLETYPE omx_handle, OMX_PTR app_data, OMX_BUFFERHEADERTYPE *omx_buffer)
 {
+	static int count = 0;
+	
 	decodeBufferFull = 0;
+	
+	if ( logfile )
+		fprintf( logfile, "EmptyBufferDone %d\n", ++count );
 	
 	return OMX_ErrorNone;
 }
@@ -832,9 +930,12 @@ EmptyBufferDone (OMX_HANDLETYPE omx_handle, OMX_PTR app_data, OMX_BUFFERHEADERTY
 static void decodeLoop(void)
 {
 	unsigned int count;
+	unsigned int loopIsInfinite = 0;
+
+    if (frame_count == 0) loopIsInfinite = 1; //infinite loop
 	count = frame_count;
 
-    while ( count-- > 0 ) {
+    while ( count-- > 0 || loopIsInfinite ) {
 		for (;;) {
 			fd_set fds;
 			struct timeval tv;
@@ -851,8 +952,6 @@ static void decodeLoop(void)
 			
 			r = select(fd + 1, &fds, NULL, NULL, &tv);
 
-			ProcessDecodedBuffer();
-			
 			if (-1 == r) {
 				if (EINTR == errno)
 					continue;
@@ -864,6 +963,8 @@ static void decodeLoop(void)
 				exit(EXIT_FAILURE);
 			}
 
+			ProcessDecodedBuffer();
+			
 			if (decode_frame())
 				break;
 			/* EAGAIN - continue select loop. */
@@ -989,7 +1090,10 @@ static void init_sentinel(void)
 	}
 	
 	nextFrameIndex = 0;
+	eventFrameIndex = 0;
+	eventFrameStop = 0;
 	nextSumIndex = 0;
+	eventSumIndex = 0;
 	triggered = 0;
 	untriggered = 0;
 	triggerCounter = 0;
@@ -998,6 +1102,19 @@ static void init_sentinel(void)
 	eventDuration = 0;
 	videoFile = 0;
 	textFile = 0;
+	
+	threadingJob.eventStartTimeHi = 0;
+	threadingJob.eventStartTimeLo = 0;
+	threadingJob.eventStopTimeHi = 0;
+	threadingJob.eventStopTimeLo = 0;
+	threadingJob.jobPending = 0;
+	
+	int rc = pthread_create( &thread_id, NULL, &saveEventThread, NULL );
+	if ( rc )
+	{
+		fprintf(stderr, "Error creating thread\n");
+	}
+	pthread_detach( thread_id );
 }
 
 static void uninit_decoder(void)
@@ -1262,7 +1379,7 @@ int main(int argc, char **argv)
     if ( getJpeg )
     {
 		logfile = fopen( "logfile.txt", "w" );
-		frame_count = 1;
+		frame_count = 300;
 		open_device();
 		init_device( 1 );
 		start_capturing();

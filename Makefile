@@ -3,7 +3,7 @@ BIN=sentinel.bin
 
 #CFLAGS+= -g -DOMX_SKIP64BIT
 CFLAGS+= -O2 -DOMX_SKIP64BIT
-LDFLAGS+=-L$(SDKSTAGE)/opt/vc/lib/ -lbcm_host -lopenmaxil -lm
+LDFLAGS+=-L$(SDKSTAGE)/opt/vc/lib/ -lbcm_host -lopenmaxil -lm -lpthread
 INCLUDES+=-I$(SDKSTAGE)/opt/vc/include/
 
 all: $(BIN) $(LIB)
