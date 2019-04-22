@@ -96,6 +96,12 @@ static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t condition = PTHREAD_COND_INITIALIZER;
 static pthread_t thread_id;
 
+static pthread_mutex_t mutex2 = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t condition2 = PTHREAD_COND_INITIALIZER;
+static pthread_t thread_id2;
+
+static int thread_exit;
+
 #define ALIGN(x, y) (((x) + ((y) - 1)) & ~((y) - 1))
 
 struct ThreadArguments
@@ -343,6 +349,8 @@ static void init_mmap(void)
 
 		if (-1 == xioctl(fd, VIDIOC_QUERYBUF, &buf))
 			errno_exit("VIDIOC_QUERYBUF");
+			
+		printf( "Memory map buffer length: %d\n", buf.length );
 
 		buffers[n_buffers].length = buf.length;
 		buffers[n_buffers].start =
@@ -537,12 +545,16 @@ static int decode_frame(void)
 	unsigned int timeStamp_lo = timeStamp_us & 0xffffffff;
 
 	keepFrames( buffers[buf.index].start, buf.bytesused, timeStamp_lo );
+	if ( buf.bytesused > decoderBuffer->nAllocLen )
+	{
+		fprintf(stderr, "Input frame too big: %d\n", buf.bytesused );
+		exit(EXIT_FAILURE);
+	}
 	
 	assert(buf.index < n_buffers);
 
-	decoderBuffer->pBuffer = buffers[buf.index].start;
+	memcpy( decoderBuffer->pBuffer, buffers[buf.index].start, buf.bytesused );
 	decoderBuffer->nFilledLen = buf.bytesused;
-	decoderBuffer->nAllocLen = buf.length;
 	decoderBuffer->nOffset = 0;
 	decoderBuffer->nInputPortIndex = 130;
 	decoderBuffer->nTimeStamp.nLowPart = timeStamp_lo;
@@ -554,6 +566,13 @@ static int decode_frame(void)
 	if (error != OMX_ErrorNone) {
 		fprintf(stderr, "Cannot EmptyThisBuffer: %d, %s\n",
 		        errno, strerror(errno));
+		        
+		if ( logfile != 0 )
+		{
+			fflush( logfile );
+			fclose( logfile );
+		}
+		
 		exit(EXIT_FAILURE);
 	}
 	
@@ -677,9 +696,15 @@ static void *saveEventThread(void* argin)
 	for (;;)
 	{
 		pthread_mutex_lock(&mutex);
-		while ( !threadingJob.jobPending )
+		while ( !threadingJob.jobPending && !thread_exit )
 			pthread_cond_wait( &condition, &mutex );
 			
+		if ( thread_exit )
+		{
+			pthread_mutex_unlock(&mutex);
+			return 0;
+		}
+		
 		saveEventJob();
 			
 		threadingJob.jobPending = 0;
@@ -696,7 +721,7 @@ static void initiateTrigger( unsigned int timeStamp_hi, unsigned int timeStamp_l
 	untriggered = 0;
 	eventDuration = 0;
 	
-	printf( "Triggered\n" );
+	// printf( "Triggered\n" );
 }
 
 static void continueTrigger( unsigned int timeStamp_lo )
@@ -722,7 +747,7 @@ static void terminateTrigger(unsigned int timeStamp_hi, unsigned int timeStamp_l
 	pthread_mutex_unlock(&mutex);
 	pthread_cond_signal(&condition);
 	
-	printf( "Untriggered\n" );
+	// printf( "Untriggered\n" );
 }
 
 static void processTrigger( int sum, unsigned int timeStamp_hi, unsigned int timeStamp_lo )
@@ -777,43 +802,12 @@ static void processTrigger( int sum, unsigned int timeStamp_hi, unsigned int tim
 	}
 }
 
-static void ProcessDecodedBuffer(void)
+static void ProcessDecodedBuffer(OMX_BUFFERHEADERTYPE* workingBuffer )
 {
 	static int countn = 0;
 	
-	if ( outputBuffer == 0 )
-		return;
-		
-	OMX_ERRORTYPE error;
-
-	OMX_BUFFERHEADERTYPE* workingBuffer = outputBuffer;
-	outputBuffer = 0;
-	
-	// printf( "--->- %d %d\n", workingBuffer->nTimeStamp.nLowPart, workingBuffer->nFilledLen );
- 	
- 	int ping = workingBuffer == pingBuffer;
- 	int pong = workingBuffer == pongBuffer;
- 	
- 	fprintf( logfile, "FillThisBuffer %d\n", ++countn + 1 );
- 	
-    error = OMX_FillThisBuffer( decoderHandle, 
-                                ping ?  pongBuffer : pingBuffer );
-            
-	if (error != OMX_ErrorNone) {
-		fprintf(stderr, "FillThisBuffer failed: %d, %s, %d %d %d\n",
-		        errno, strerror(errno), ping, pong, outputBuffer!= 0 );
-		
-		if ( logfile != 0 )
-		{
-			fflush( logfile );
-			fclose( logfile );
-		}
-		
-		exit(EXIT_FAILURE);
-	}
-
 	clock_t t = clock();
-	fprintf( logfile, "clock %d\n", countn );
+	fprintf( logfile, "clock %d\n", ++countn );
 
 	int sum = 0;
 	int xsum = 0;
@@ -864,17 +858,14 @@ static void ProcessDecodedBuffer(void)
 	
 	pvend = testFrame + 1920*1080/9;
 	
-	if ( triggered == 0 )
+	while ( pTest < pvend )
 	{
-		while ( pTest < pvend )
-		{
-			int n = *pRef;
-			n *= 15;
-			n += *pTest++;
-			n >>= 4;
+		int n = *pRef;
+		n *= 7;
+		n += *pTest++;
+		n >>= 3;
 			
-			*pRef++ = n;
-		}
+		*pRef++ = n;
 	}
 	
 	sumBuffers[nextSumIndex] = sum;
@@ -892,6 +883,53 @@ static void ProcessDecodedBuffer(void)
 	fprintf( logfile, "Sum Count Ref: %d %d %x %7.4f\n", sum, count, referenceFrame[100], duration );
 }
 
+static void *decodedBufferThread(void* argin)
+{
+	OMX_ERRORTYPE error;
+	int countn = 1;
+
+	for (;;)
+	{
+		pthread_mutex_lock(&mutex2);
+		while ( outputBuffer == 0 && !thread_exit )
+			pthread_cond_wait( &condition2, &mutex2 );			
+
+		OMX_BUFFERHEADERTYPE* workingBuffer = outputBuffer;
+		outputBuffer = 0;
+	
+		pthread_mutex_unlock(&mutex2);
+		
+		if ( thread_exit )
+			return  0;
+ 	
+ 		int ping = workingBuffer == pingBuffer;
+ 		int pong = workingBuffer == pongBuffer;
+ 	
+ 		fprintf( logfile, "FillThisBuffer %d\n", ++countn );
+ 	
+    	error = OMX_FillThisBuffer( decoderHandle, 
+                                    ping ?  pongBuffer : pingBuffer );
+            
+	    if (error != OMX_ErrorNone) {
+	    	if ( errno == 0 )
+	    		return 0;
+	    		
+		    fprintf(stderr, "FillThisBuffer failed: %d, %s, %d %d %d\n",
+		            errno, strerror(errno), ping, pong, outputBuffer!= 0 );
+		
+		    if ( logfile != 0 )
+		    {
+			    fflush( logfile );
+			    fclose( logfile );
+		    }
+		
+			exit(EXIT_FAILURE);
+		}
+			
+		ProcessDecodedBuffer( workingBuffer );
+	}
+}
+
 static OMX_ERRORTYPE
 FillBufferDone (OMX_HANDLETYPE omx_handle, OMX_PTR app_data, OMX_BUFFERHEADERTYPE *omx_buffer)
 {
@@ -906,7 +944,10 @@ FillBufferDone (OMX_HANDLETYPE omx_handle, OMX_PTR app_data, OMX_BUFFERHEADERTYP
 		exit(EXIT_FAILURE);
 	}
 	
+	pthread_mutex_lock(&mutex2);
 	outputBuffer = omx_buffer;
+	pthread_mutex_unlock(&mutex2);
+	pthread_cond_signal(&condition2);
 	
 	if ( logfile )
 		fprintf( logfile, "FillBufferDone %d\n", ++count );
@@ -947,8 +988,6 @@ static void decodeLoop(void)
 			/* Timeout. */
 			tv.tv_sec = 2;
 			tv.tv_usec = 0;
-
-			ProcessDecodedBuffer();
 			
 			r = select(fd + 1, &fds, NULL, NULL, &tv);
 
@@ -962,8 +1001,6 @@ static void decodeLoop(void)
 				fprintf(stderr, "select timeout\n");
 				exit(EXIT_FAILURE);
 			}
-
-			ProcessDecodedBuffer();
 			
 			if (decode_frame())
 				break;
@@ -1011,9 +1048,12 @@ static void init_decoder(void)
     error = OMX_GetParameter( decoderHandle, OMX_IndexParamPortDefinition, &paramPort );
     
     paramPort.nBufferCountActual = paramPort.nBufferCountMin;
+    paramPort.nBufferSize = 4147200;
     error = OMX_SetParameter( decoderHandle, OMX_IndexParamPortDefinition, &paramPort );
     
     inputBufferSize = paramPort.nBufferSize;
+    
+    printf( "inputBufferSize: %d\n", inputBufferSize );
     
 	if (error != OMX_ErrorNone) {
 		fprintf(stderr, "Cannot get parameter: %d, %s\n",
@@ -1109,12 +1149,31 @@ static void init_sentinel(void)
 	threadingJob.eventStopTimeLo = 0;
 	threadingJob.jobPending = 0;
 	
+	thread_exit = 0;
+	
 	int rc = pthread_create( &thread_id, NULL, &saveEventThread, NULL );
 	if ( rc )
 	{
-		fprintf(stderr, "Error creating thread\n");
+		fprintf(stderr, "Error creating thread_id\n");
 	}
-	pthread_detach( thread_id );
+	
+	outputBuffer = 0;
+	rc = pthread_create( &thread_id2, NULL, &decodedBufferThread, NULL );
+	if ( rc )
+	{
+		fprintf(stderr, "Error creating thread_id2\n");
+	}
+}
+
+static void uninit_sentinel(void)
+{
+	thread_exit = 1;
+	
+	pthread_cond_signal( &condition );
+	pthread_cond_signal( &condition2 );
+	
+	pthread_join( thread_id, NULL );
+	pthread_join( thread_id2, NULL );
 }
 
 static void uninit_decoder(void)
@@ -1261,6 +1320,13 @@ static void composeLoop(void)
 		if (error != OMX_ErrorNone) {
 			fprintf(stderr, "Cannot EmptyThisBuffer: %d, %s\n",
 					errno, strerror(errno));
+					
+		    if ( logfile != 0 )
+		    {
+			    fflush( logfile );
+			    fclose( logfile );
+		    }
+		    
 			exit(EXIT_FAILURE);
 		}
 		
@@ -1434,6 +1500,7 @@ int main(int argc, char **argv)
 	uninit_decoder();
 	uninit_device();
 	close_device();
+	uninit_sentinel();
 	fprintf(stderr, "\n");
 	
 	if ( logfile != 0 )
