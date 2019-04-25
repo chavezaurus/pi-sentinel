@@ -56,10 +56,9 @@ struct buffer          *buffers;
 static unsigned int n_buffers;
 static int out_buf;
 static int decodeBufferFull;
-//static int frame_count = 1;
 static int frame_count = 300;
 static int frame_number = 0;
-static long toEpochOffset_us;
+static int force_count = -1;
 static unsigned char* testFrame;
 static unsigned char* referenceFrame;
 static unsigned char* maskFrame;
@@ -146,7 +145,7 @@ static void save_image(const void *p, int size)
     }
 }
 
-static long long getEpochTimeShift()
+static double getEpochTimeShift()
 {
 	struct timeval epochtime;
 	struct timespec  vsTime;
@@ -154,9 +153,9 @@ static long long getEpochTimeShift()
 	gettimeofday(&epochtime, NULL);
 	clock_gettime(CLOCK_MONOTONIC, &vsTime);
 
-	long long uptime_us = (long long) vsTime.tv_sec * 1000000 + round( vsTime.tv_nsec/ 1000.0);
-	long long epoch_us =  (long long) epochtime.tv_sec * 1000000  + epochtime.tv_usec;
-	return epoch_us - uptime_us;
+	double uptime = vsTime.tv_sec + vsTime.tv_nsec/1000000000.0;
+	double epoch =  epochtime.tv_sec + epochtime.tv_usec/1000000.0;
+	return epoch - uptime;
 }
 
 static int IsIDR( const unsigned char* p, int size )
@@ -582,6 +581,7 @@ static int decode_frame(void)
 	return 1;
 }
 
+
 /*
 static void saveEvent(void)
 {
@@ -638,8 +638,8 @@ static void saveEventJob(void)
 	if ( frameIndex == -1 || sumIndex == -1 || stopIndex == -1 )
 		return;
 	
-	long long timelong = (long long)arg.eventStartTimeHi * 1000000 + arg.eventStartTimeLo + getEpochTimeShift();
-	time_t unixTime = timelong / 1000000;
+	double timelong = arg.eventStartTimeHi*4294.967296 + 1.0e-6*arg.eventStartTimeLo + getEpochTimeShift();
+	time_t unixTime = timelong;
 	
 	ptm = gmtime( &unixTime );
 	sprintf( buffer, "s%04d%02d%02d_%02d%02d%02d.h264",
@@ -663,6 +663,7 @@ static void saveEventJob(void)
 		
 	int backCount = 0;
 	
+	// Back up to find the frame that is enough before the start frame and also a key frame
 	while ( backCount++ < 15 || !IsIDR( frameBuffers[frameIndex], frameSizes[frameIndex] ) )
 	{
 		frameIndex = (frameIndex + FRAMES_TO_KEEP - 1) % FRAMES_TO_KEEP;
@@ -672,6 +673,7 @@ static void saveEventJob(void)
 			break;
 	}
 	
+	int frameCount = 0;
 	while ( sumIndex != stopIndex )
 	{
 		double delta = 1.0e-6 * ((int)frameTimestamps[frameIndex] - (int)arg.eventStartTimeLo);
@@ -679,8 +681,8 @@ static void saveEventJob(void)
 		int sum = sumBuffers[sumIndex];
 		double xCentroid = (sum == 0) ? 0.0 : xSumBuffers[sumIndex]/sum;
 		double yCentroid = (sum == 0) ? 0.0 : ySumBuffers[sumIndex]/sum;	
-		fprintf( textFile, "%7.3f %6d %6d %7.1f %7.1f\n",
-		         delta, counts, sum, xCentroid, yCentroid );	
+		fprintf( textFile, "%3d %7.3f %6d %6d %7.1f %7.1f\n",
+		         ++frameCount, delta, counts, sum, xCentroid, yCentroid );	
 		
 		fwrite(frameBuffers[frameIndex], frameSizes[frameIndex], 1, videoFile );
 		frameIndex = (frameIndex + 1) % FRAMES_TO_KEEP;
@@ -752,6 +754,8 @@ static void terminateTrigger(unsigned int timeStamp_hi, unsigned int timeStamp_l
 
 static void processTrigger( int sum, unsigned int timeStamp_hi, unsigned int timeStamp_lo )
 {
+	++frame_number;
+
 	if ( triggered == 0 )
 	{
 		if ( sum >= sumThreshold )
@@ -760,6 +764,8 @@ static void processTrigger( int sum, unsigned int timeStamp_hi, unsigned int tim
 			if ( triggerCounter >= 2 )
 				initiateTrigger( timeStamp_hi, timeStamp_lo );
 		}
+		else if ( frame_number == force_count )
+			initiateTrigger( timeStamp_hi, timeStamp_lo );
 		else
 			triggerCounter = 0;
 	}
@@ -1100,8 +1106,6 @@ static void init_decoder(void)
     error = OMX_SendCommand ( decoderHandle, OMX_CommandStateSet, OMX_StateExecuting, NULL);
     
     error = OMX_FillThisBuffer( decoderHandle, pingBuffer );
-    
-    toEpochOffset_us = getEpochTimeShift();
 }
 
 static void init_sentinel(void)
@@ -1364,13 +1368,14 @@ static void usage(FILE *fp, int argc, char **argv)
 	        "-j | --jpeg          Output single jpeg image\n"
 	        "-m | --mpeg          Get MPEG video\n"
 	        "-h | --help          Print this message\n"
-            "-c | --count         Number of frames to grab [%i] - use 0 for infinite\n"
+            "-c | --count         Number of frames to process [%i] - use 0 for infinite\n"
+			"-f | --force         Force a trigger after [%d] frames\n"
             "\n"
 			"Example usage: sentinel -j -d /dev/video0\n",
-	        argv[0], dev_name, h264_name, frame_count);
+	        argv[0], dev_name, h264_name, frame_count, force_count);
 }
 
-static const char short_options[] = "d:p:jmc:";
+static const char short_options[] = "d:p:jmc:f:";
 
 static const struct option
         long_options[] = {
@@ -1380,6 +1385,7 @@ static const struct option
 	{ "mpeg",   no_argument,       NULL, 'm' },
 	{ "help",   no_argument,       NULL, 'h' },
 	{ "count",  required_argument, NULL, 'c' },
+	{ "force",  required_argument, NULL, 'f' },
 	{ 0, 0, 0, 0 }
 };
 
@@ -1432,6 +1438,12 @@ int main(int argc, char **argv)
 		case 'c':
 			errno = 0;
 			frame_count = strtol(optarg, NULL, 0);
+			if (errno)
+				errno_exit(optarg);
+			break;
+
+		case 'f':
+			force_count = strtol(optarg,NULL, 0);
 			if (errno)
 				errno_exit(optarg);
 			break;
