@@ -59,6 +59,7 @@ static int decodeBufferFull;
 static int frame_count = 300;
 static int frame_number = 0;
 static int force_count = -1;
+static int noise_level = 50;
 static unsigned char* testFrame;
 static unsigned char* referenceFrame;
 static unsigned char* maskFrame;
@@ -532,16 +533,9 @@ static int decode_frame(void)
 		}
 	}
 
-	/*
-    FILE *fp=fopen("video.raw","ab");
-    fwrite(buffers[buf.index].start, buf.bytesused, 1, fp);
-    fflush(fp);
-    fclose(fp);
-    */
-
-	long long timeStamp_us = 1000000 * (long long) buf.timestamp.tv_sec + buf.timestamp.tv_usec;
-	unsigned int timeStamp_hi = timeStamp_us >> 32;
-	unsigned int timeStamp_lo = timeStamp_us & 0xffffffff;
+	double timeStampSec = buf.timestamp.tv_sec + 1.0e-6*buf.timestamp.tv_usec;
+	unsigned int timeStamp_hi = timeStampSec/4294.967296;
+	unsigned int timeStamp_lo = fmod(timeStampSec,4294.967296)*1.0e6;;
 
 	keepFrames( buffers[buf.index].start, buf.bytesused, timeStamp_lo );
 	if ( buf.bytesused > decoderBuffer->nAllocLen )
@@ -581,39 +575,6 @@ static int decode_frame(void)
 	return 1;
 }
 
-
-/*
-static void saveEvent(void)
-{
-	if ( videoFile == 0 || textFile == 0 )
-		return;
-		
-	if ( eventFrameIndex != eventFrameStop )
-	{
-		double delta = 1.0e-6 * ((int)frameTimestamps[eventFrameIndex] - (int)eventTimeStamp_lo);
-		int counts = sumCounts[eventSumIndex];
-		int sum = sumBuffers[eventSumIndex];
-		double xCentroid = (sum == 0) ? 0.0 : xSumBuffers[eventSumIndex]/sum;
-		double yCentroid = (sum == 0) ? 0.0 : ySumBuffers[eventSumIndex]/sum;	
-		// fprintf( textFile, "%7.3f %6d %6d %7.1f %7.1f\n",
-		//           delta, counts, sum, xCentroid, yCentroid );	
-		
-		// fwrite(frameBuffers[eventFrameIndex], frameSizes[eventFrameIndex], 1, videoFile );
-		eventFrameIndex = (eventFrameIndex + 1) % FRAMES_TO_KEEP;
-		eventSumIndex = (eventSumIndex + 1) % FRAMES_TO_KEEP;
-	}
-	
-	if ( eventFrameIndex == eventFrameStop && !triggered && !untriggered )
-	{
-		fclose( videoFile );
-		fclose( textFile );
-		
-		videoFile = 0;
-		textFile = 0;
-	}
-}
-*/
-
 static void saveEventJob(void)
 {
 	struct ThreadArguments arg = threadingJob;
@@ -646,8 +607,6 @@ static void saveEventJob(void)
 	                  ptm->tm_year+1900, ptm->tm_mon+1, ptm->tm_mday,
 	                  ptm->tm_hour, ptm->tm_min, ptm->tm_sec );	
 	
-	// strcpy( buffer, "stest.h264" );
-	                  
 	FILE* videoFile = fopen( buffer, "w" );
 	if ( videoFile == 0 )
 		return;
@@ -656,14 +615,13 @@ static void saveEventJob(void)
 	                  ptm->tm_year+1900, ptm->tm_mon+1, ptm->tm_mday,
 	                  ptm->tm_hour, ptm->tm_min, ptm->tm_sec );	
 
-    // strcpy( buffer, "stest.txt" );
 	FILE* textFile = fopen( buffer, "w" );
 	if ( textFile == 0 )
 		return;
 		
 	int backCount = 0;
 	
-	// Back up to find the frame that is enough before the start frame and also a key frame
+	// Back up to find the frame that is far enough before the start frame and also a key frame
 	while ( backCount++ < 15 || !IsIDR( frameBuffers[frameIndex], frameSizes[frameIndex] ) )
 	{
 		frameIndex = (frameIndex + FRAMES_TO_KEEP - 1) % FRAMES_TO_KEEP;
@@ -1023,7 +981,12 @@ static void init_decoder(void)
     
     int inputBufferSize;
 	
-	OMX_Init();
+	error = OMX_Init();
+	if (error != OMX_ErrorNone) {
+		fprintf(stderr, "Cannot init: %d, %s\n",
+		        errno, strerror(errno));
+		exit(EXIT_FAILURE);
+	}
 	
 	decoderCallbacks.EventHandler = EventHandler;
 	decoderCallbacks.FillBufferDone = FillBufferDone;
@@ -1047,29 +1010,35 @@ static void init_decoder(void)
     format.eCompressionFormat = OMX_VIDEO_CodingAVC;
     
     error = OMX_SetParameter( decoderHandle, OMX_IndexParamVideoPortFormat, &format);
+	if (error != OMX_ErrorNone) {
+		fprintf(stderr, "Cannot set parameter: %d, %s\n",
+		        errno, strerror(errno));
+		exit(EXIT_FAILURE);
+	}
 
 	paramPort.nSize = sizeof( OMX_PARAM_PORTDEFINITIONTYPE );
 	paramPort.nVersion.nVersion = OMX_VERSION;
 	paramPort.nPortIndex = 130;
     error = OMX_GetParameter( decoderHandle, OMX_IndexParamPortDefinition, &paramPort );
-    
-    paramPort.nBufferCountActual = paramPort.nBufferCountMin;
-    paramPort.nBufferSize = 4147200;
-    error = OMX_SetParameter( decoderHandle, OMX_IndexParamPortDefinition, &paramPort );
-    
-    inputBufferSize = paramPort.nBufferSize;
-    
-    printf( "inputBufferSize: %d\n", inputBufferSize );
-    
 	if (error != OMX_ErrorNone) {
 		fprintf(stderr, "Cannot get parameter: %d, %s\n",
 		        errno, strerror(errno));
 		exit(EXIT_FAILURE);
 	}
-	
+    
+    paramPort.nBufferCountActual = paramPort.nBufferCountMin;
+    paramPort.nBufferSize = 4147200;
+    error = OMX_SetParameter( decoderHandle, OMX_IndexParamPortDefinition, &paramPort );
+	if (error != OMX_ErrorNone) {
+		fprintf(stderr, "Cannot set parameter: %d, %s\n",
+		        errno, strerror(errno));
+		exit(EXIT_FAILURE);
+	}
+    
+    inputBufferSize = paramPort.nBufferSize;
+    
 	paramPort.nPortIndex = 131;
     error = OMX_GetParameter( decoderHandle, OMX_IndexParamPortDefinition, &paramPort );
-	
 	if (error != OMX_ErrorNone) {
 		fprintf(stderr, "Cannot get parameter: %d, %s\n",
 		        errno, strerror(errno));
@@ -1089,23 +1058,46 @@ static void init_decoder(void)
 	                                   paramPort.nBufferSize );
 			                
     error = OMX_SetParameter( decoderHandle, OMX_IndexParamPortDefinition, &paramPort );
+	if (error != OMX_ErrorNone) {
+		fprintf(stderr, "Cannot set parameter: %d, %s\n",
+		        errno, strerror(errno));
+		exit(EXIT_FAILURE);
+	}
 	
-    error = OMX_SendCommand( decoderHandle, OMX_CommandStateSet, OMX_StateIdle, NULL);
+	// It appears that ports are already enabled so these are not needed
+    // error = error || OMX_SendCommand ( decoderHandle, OMX_CommandPortEnable, 130, NULL);    
+    // error = error || OMX_SendCommand ( decoderHandle, OMX_CommandPortEnable, 131, NULL);
+    error = error || OMX_SendCommand( decoderHandle, OMX_CommandStateSet, OMX_StateIdle, NULL);
+	if (error != OMX_ErrorNone) {
+		fprintf(stderr, "Cannot send command: %d, %s\n",
+		        errno, strerror(errno));
+		exit(EXIT_FAILURE);
+	}
 
-    error = OMX_AllocateBuffer( decoderHandle, &decoderBuffer, 130, NULL, inputBufferSize );
-    error = OMX_AllocateBuffer( decoderHandle, &pingBuffer, 131, NULL, paramPort.nBufferSize );
-    error = OMX_AllocateBuffer( decoderHandle, &pongBuffer, 131, NULL, paramPort.nBufferSize );
+    error = error || OMX_AllocateBuffer( decoderHandle, &decoderBuffer, 130, NULL, inputBufferSize );
+    error = error || OMX_AllocateBuffer( decoderHandle, &pingBuffer, 131, NULL, paramPort.nBufferSize );
+    error = error || OMX_AllocateBuffer( decoderHandle, &pongBuffer, 131, NULL, paramPort.nBufferSize );
+	if (error != OMX_ErrorNone) {
+		fprintf(stderr, "Cannot allocate buffers: %d, %s\n",
+		        errno, strerror(errno));
+		exit(EXIT_FAILURE);
+	}
+
     outputBuffer = 0;
     
-    error = OMX_SendCommand ( decoderHandle, OMX_CommandPortDisable, 130, NULL);
-    error = OMX_SendCommand ( decoderHandle, OMX_CommandPortEnable, 130, NULL);
-    
-    error = OMX_SendCommand ( decoderHandle, OMX_CommandPortDisable, 131, NULL);
-    error = OMX_SendCommand ( decoderHandle, OMX_CommandPortEnable, 131, NULL);
-    
-    error = OMX_SendCommand ( decoderHandle, OMX_CommandStateSet, OMX_StateExecuting, NULL);
+    error = error || OMX_SendCommand ( decoderHandle, OMX_CommandStateSet, OMX_StateExecuting, NULL);
+	if (error != OMX_ErrorNone) {
+		fprintf(stderr, "Cannot send commands: %d, %s\n",
+		        errno, strerror(errno));
+		exit(EXIT_FAILURE);
+	}
     
     error = OMX_FillThisBuffer( decoderHandle, pingBuffer );
+	if (error != OMX_ErrorNone) {
+		fprintf(stderr, "Cannot fill this buffer: %d, %s\n",
+		        errno, strerror(errno));
+		exit(EXIT_FAILURE);
+	}
 }
 
 static void init_sentinel(void)
@@ -1178,6 +1170,10 @@ static void uninit_sentinel(void)
 	
 	pthread_join( thread_id, NULL );
 	pthread_join( thread_id2, NULL );
+
+	free(testFrame);
+	free(referenceFrame);
+	free(maskFrame);
 }
 
 static void uninit_decoder(void)
@@ -1185,15 +1181,33 @@ static void uninit_decoder(void)
 	printf( "uninit_decoder\n" );
 	OMX_ERRORTYPE error = OMX_ErrorNone;
 	
-    error = error ? error : OMX_SendCommand( decoderHandle, OMX_CommandStateSet, OMX_StateIdle, NULL);
+    error = error || OMX_SendCommand( decoderHandle, OMX_CommandStateSet, OMX_StateIdle, NULL);    
+    error = error || OMX_SendCommand ( decoderHandle, OMX_CommandPortDisable, 130, NULL);
+    error = error || OMX_SendCommand ( decoderHandle, OMX_CommandPortDisable, 131, NULL);
+	if (error != OMX_ErrorNone) {
+		fprintf(stderr, "Cannot send commands: %d, %s\n",
+		        errno, strerror(errno));
+		exit(EXIT_FAILURE);
+	}
     
-    error = error ? error : OMX_SendCommand ( decoderHandle, OMX_CommandPortDisable, 130, NULL);
-    error = error ? error : OMX_SendCommand ( decoderHandle, OMX_CommandPortDisable, 131, NULL);
-    
-	error = error ? error : OMX_FreeBuffer(decoderHandle, 131, pingBuffer );
-	error = error ? error : OMX_FreeBuffer(decoderHandle, 131, pongBuffer );
-	error = error ? error : OMX_FreeHandle(decoderHandle);
+	error = error || OMX_FreeBuffer(decoderHandle, 130, decoderBuffer );
+	error = error || OMX_FreeBuffer(decoderHandle, 131, pingBuffer );
+	error = error || OMX_FreeBuffer(decoderHandle, 131, pongBuffer );
+	if (error != OMX_ErrorNone) {
+		fprintf(stderr, "Cannot free buffers: %d, %s\n",
+		        errno, strerror(errno));
+		exit(EXIT_FAILURE);
+	}
+
+	error = OMX_FreeHandle(decoderHandle);
 	
+	if (error != OMX_ErrorNone) {
+		fprintf(stderr, "Cannot free handle: %d, %s\n",
+		        errno, strerror(errno));
+		exit(EXIT_FAILURE);
+	}
+
+	error = OMX_Deinit();
 	if (error != OMX_ErrorNone) {
 		fprintf(stderr, "Cannot uninit decoder: %d, %s\n",
 		        errno, strerror(errno));
@@ -1207,7 +1221,11 @@ static void readMask(void)
 	
 	FILE* file = fopen( "mask.ppm", "rb" );
 	if ( file == 0 )
+	{
+		printf( "No mask file found. Noise level set to: %d\n", noise_level );
+		memset( maskFrame, noise_level, 640*360 );
 		return;
+	}
 	
 	int width;
 	int height;
@@ -1254,7 +1272,7 @@ static void readMask(void)
 		if ( r > 250 && g < 10 && b < 10 )
 			maskFrame[i] = 255;
 		else
-			maskFrame[i] = 50;
+			maskFrame[i] = noise_level;
 	}
 }
 
@@ -1370,12 +1388,13 @@ static void usage(FILE *fp, int argc, char **argv)
 	        "-h | --help          Print this message\n"
             "-c | --count         Number of frames to process [%i] - use 0 for infinite\n"
 			"-f | --force         Force a trigger after [%d] frames\n"
+			"-n | --noise         Noise level [%d]\n"
             "\n"
 			"Example usage: sentinel -j -d /dev/video0\n",
-	        argv[0], dev_name, h264_name, frame_count, force_count);
+	        argv[0], dev_name, h264_name, frame_count, force_count, noise_level);
 }
 
-static const char short_options[] = "d:p:jmc:f:";
+static const char short_options[] = "d:p:jmc:f:n:";
 
 static const struct option
         long_options[] = {
@@ -1386,6 +1405,7 @@ static const struct option
 	{ "help",   no_argument,       NULL, 'h' },
 	{ "count",  required_argument, NULL, 'c' },
 	{ "force",  required_argument, NULL, 'f' },
+	{ "noise",  required_argument, NULL, 'n' },
 	{ 0, 0, 0, 0 }
 };
 
@@ -1444,6 +1464,12 @@ int main(int argc, char **argv)
 
 		case 'f':
 			force_count = strtol(optarg,NULL, 0);
+			if (errno)
+				errno_exit(optarg);
+			break;
+
+		case 'n':
+			noise_level = strtol(optarg,NULL, 0);
 			if (errno)
 				errno_exit(optarg);
 			break;
@@ -1509,10 +1535,10 @@ int main(int argc, char **argv)
 	start_capturing();
 	decodeLoop();
 	stop_capturing();
+	uninit_sentinel();
 	uninit_decoder();
 	uninit_device();
 	close_device();
-	uninit_sentinel();
 	fprintf(stderr, "\n");
 	
 	if ( logfile != 0 )
