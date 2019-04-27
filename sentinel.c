@@ -87,6 +87,9 @@ static int sumThreshold;
 static int eventDuration;
 static unsigned int eventTimeStamp_hi;
 static unsigned int eventTimeStamp_lo;
+static int rateLimitLastSecond;
+static int rateLimitBank;
+static int rateLimitEventsPerHour;
 
 static FILE* videoFile;
 static FILE* textFile;
@@ -106,10 +109,10 @@ static int thread_exit;
 
 struct ThreadArguments
 {
-	int eventStartTimeHi;
-	int eventStartTimeLo;
-	int eventStopTimeHi;
-	int eventStopTimeLo;
+	unsigned int eventStartTimeHi;
+	unsigned int eventStartTimeLo;
+	unsigned int eventStopTimeHi;
+	unsigned int eventStopTimeLo;
 	int jobPending;
 } threadingJob;
 
@@ -535,7 +538,7 @@ static int decode_frame(void)
 
 	double timeStampSec = buf.timestamp.tv_sec + 1.0e-6*buf.timestamp.tv_usec;
 	unsigned int timeStamp_hi = timeStampSec/4294.967296;
-	unsigned int timeStamp_lo = fmod(timeStampSec,4294.967296)*1.0e6;;
+	unsigned int timeStamp_lo = fmod(timeStampSec,4294.967296)*1.0e6;
 
 	keepFrames( buffers[buf.index].start, buf.bytesused, timeStamp_lo );
 	if ( buf.bytesused > decoderBuffer->nAllocLen )
@@ -580,7 +583,10 @@ static void saveEventJob(void)
 	struct ThreadArguments arg = threadingJob;
 	
     struct tm * ptm;
-	char buffer[100];
+	char nameVideoFile[100];
+	char nameTextFile[100];
+	char nameSystemCmd[100];
+	char nameMp4File[100];
 	
 	int frameIndex = -1;
 	int sumIndex   = -1;
@@ -601,21 +607,23 @@ static void saveEventJob(void)
 	
 	double timelong = arg.eventStartTimeHi*4294.967296 + 1.0e-6*arg.eventStartTimeLo + getEpochTimeShift();
 	time_t unixTime = timelong;
+
+	printf( "Timestamp: %f %u %u\n", getEpochTimeShift(), arg.eventStartTimeHi, arg.eventStartTimeLo );
 	
 	ptm = gmtime( &unixTime );
-	sprintf( buffer, "s%04d%02d%02d_%02d%02d%02d.h264",
-	                  ptm->tm_year+1900, ptm->tm_mon+1, ptm->tm_mday,
-	                  ptm->tm_hour, ptm->tm_min, ptm->tm_sec );	
+	sprintf( nameVideoFile, "s%04d%02d%02d_%02d%02d%02d.h264",
+	                        ptm->tm_year+1900, ptm->tm_mon+1, ptm->tm_mday,
+	                        ptm->tm_hour, ptm->tm_min, ptm->tm_sec );	
 	
-	FILE* videoFile = fopen( buffer, "w" );
+	FILE* videoFile = fopen( nameVideoFile, "w" );
 	if ( videoFile == 0 )
 		return;
 		
-	sprintf( buffer, "s%04d%02d%02d_%02d%02d%02d.txt",
-	                  ptm->tm_year+1900, ptm->tm_mon+1, ptm->tm_mday,
-	                  ptm->tm_hour, ptm->tm_min, ptm->tm_sec );	
+	sprintf( nameTextFile, "s%04d%02d%02d_%02d%02d%02d.txt",
+	                       ptm->tm_year+1900, ptm->tm_mon+1, ptm->tm_mday,
+	                       ptm->tm_hour, ptm->tm_min, ptm->tm_sec );	
 
-	FILE* textFile = fopen( buffer, "w" );
+	FILE* textFile = fopen( nameTextFile, "w" );
 	if ( textFile == 0 )
 		return;
 		
@@ -637,8 +645,8 @@ static void saveEventJob(void)
 		double delta = 1.0e-6 * ((int)frameTimestamps[frameIndex] - (int)arg.eventStartTimeLo);
 		int counts = sumCounts[sumIndex];
 		int sum = sumBuffers[sumIndex];
-		double xCentroid = (sum == 0) ? 0.0 : xSumBuffers[sumIndex]/sum;
-		double yCentroid = (sum == 0) ? 0.0 : ySumBuffers[sumIndex]/sum;	
+		double xCentroid = (sum == 0) ? 0.0 : (double)xSumBuffers[sumIndex]/sum;
+		double yCentroid = (sum == 0) ? 0.0 : (double)ySumBuffers[sumIndex]/sum;	
 		fprintf( textFile, "%3d %7.3f %6d %6d %7.1f %7.1f\n",
 		         ++frameCount, delta, counts, sum, xCentroid, yCentroid );	
 		
@@ -649,6 +657,20 @@ static void saveEventJob(void)
 	
 	fclose( videoFile );
 	fclose( textFile );
+
+	strcpy( nameMp4File, nameVideoFile );
+	char* pstr = strstr( nameMp4File, "h264");
+	if ( pstr == 0 )
+		return;
+
+	printf( "Event: %04d/%02d/%02d %02d:%02d:%02d\n",
+	        ptm->tm_year+1900, ptm->tm_mon+1, ptm->tm_mday,
+	        ptm->tm_hour, ptm->tm_min, ptm->tm_sec);
+
+	strcpy( pstr, "mp4" );
+
+	sprintf( nameSystemCmd, "MP4Box -add %s -fps 30 -quiet %s && rm %s", nameVideoFile, nameMp4File, nameVideoFile );
+	system( nameSystemCmd );
 }
 
 static void *saveEventThread(void* argin)
@@ -695,6 +717,10 @@ static void terminateTrigger(unsigned int timeStamp_hi, unsigned int timeStamp_l
 	
 	// Temporarily de-sensitize
 	memset( referenceFrame, 0xff, 1920*1080/9 );
+
+	int test = rateLimitEventsPerHour * rateLimitBank / 3600;
+	if ( test == 0 )
+		return;
 	
 	pthread_mutex_lock(&mutex);
 	
@@ -707,6 +733,9 @@ static void terminateTrigger(unsigned int timeStamp_hi, unsigned int timeStamp_l
 	pthread_mutex_unlock(&mutex);
 	pthread_cond_signal(&condition);
 	
+	rateLimitBank -= 3600 / rateLimitEventsPerHour;
+	if ( rateLimitBank < 0 )
+		rateLimitBank = 0;
 	// printf( "Untriggered\n" );
 }
 
@@ -766,6 +795,20 @@ static void processTrigger( int sum, unsigned int timeStamp_hi, unsigned int tim
 	}
 }
 
+static void limitEventRate( unsigned microseconds )
+{
+	int seconds = microseconds / 1000000;
+
+	if ( seconds != rateLimitLastSecond )
+	{
+		++rateLimitBank;
+		if ( rateLimitBank > 3600)
+			rateLimitBank = 3600;
+
+		rateLimitLastSecond = seconds;
+	}
+}
+
 static void ProcessDecodedBuffer(OMX_BUFFERHEADERTYPE* workingBuffer )
 {
 	static int countn = 0;
@@ -801,9 +844,9 @@ static void ProcessDecodedBuffer(OMX_BUFFERHEADERTYPE* workingBuffer )
 			int test = c - *pRef - *pMask++;
 			if ( test > 0 )
 			{
-				sum += c;
-				xsum += c * xcount;
-				ysum += c * ycount;
+				sum += test;
+				xsum += test * xcount;
+				ysum += test * ycount;
 				++count;
 			}
 				
@@ -840,6 +883,7 @@ static void ProcessDecodedBuffer(OMX_BUFFERHEADERTYPE* workingBuffer )
 	nextSumIndex = (nextSumIndex + 1) % FRAMES_TO_KEEP;
 		
 	processTrigger( sum, workingBuffer->nTimeStamp.nHighPart, workingBuffer->nTimeStamp.nLowPart );
+	limitEventRate( workingBuffer->nTimeStamp.nLowPart );
 	
 	t = clock()-t;
 	double duration = (double)t/CLOCKS_PER_SEC;
@@ -1134,10 +1178,14 @@ static void init_sentinel(void)
 	untriggered = 0;
 	triggerCounter = 0;
 	untriggerCounter = 0;
-	sumThreshold = 1000;
+	sumThreshold = 100;
 	eventDuration = 0;
 	videoFile = 0;
 	textFile = 0;
+
+	rateLimitLastSecond = 0;
+	rateLimitEventsPerHour = 5;
+	rateLimitBank = 3600;
 	
 	threadingJob.eventStartTimeHi = 0;
 	threadingJob.eventStartTimeLo = 0;
