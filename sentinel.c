@@ -49,6 +49,7 @@ static OMX_BUFFERHEADERTYPE *pongBuffer;
 static OMX_BUFFERHEADERTYPE *outputBuffer;
 
 static char            *composeBuffer;
+static short           *averageBuffer;
 static char            *dev_name;
 static char            *h264_name;
 static int fd = -1;
@@ -353,8 +354,6 @@ static void init_mmap(void)
 		if (-1 == xioctl(fd, VIDIOC_QUERYBUF, &buf))
 			errno_exit("VIDIOC_QUERYBUF");
 			
-		printf( "Memory map buffer length: %d\n", buf.length );
-
 		buffers[n_buffers].length = buf.length;
 		buffers[n_buffers].start =
 		        mmap(NULL /* start anywhere */,
@@ -608,8 +607,6 @@ static void saveEventJob(void)
 	double timelong = arg.eventStartTimeHi*4294.967296 + 1.0e-6*arg.eventStartTimeLo + getEpochTimeShift();
 	time_t unixTime = timelong;
 
-	printf( "Timestamp: %f %u %u\n", getEpochTimeShift(), arg.eventStartTimeHi, arg.eventStartTimeLo );
-	
 	ptm = gmtime( &unixTime );
 	sprintf( nameVideoFile, "s%04d%02d%02d_%02d%02d%02d.h264",
 	                        ptm->tm_year+1900, ptm->tm_mon+1, ptm->tm_mday,
@@ -669,7 +666,7 @@ static void saveEventJob(void)
 
 	strcpy( pstr, "mp4" );
 
-	sprintf( nameSystemCmd, "MP4Box -add %s -fps 30 -quiet %s && rm %s", nameVideoFile, nameMp4File, nameVideoFile );
+	sprintf( nameSystemCmd, "MP4Box -add %s -fps 30 -quiet %s", nameVideoFile, nameMp4File );
 	system( nameSystemCmd );
 }
 
@@ -1097,10 +1094,6 @@ static void init_decoder(void)
 	paramPort.nBufferSize = paramPort.format.image.nStride *
 			                paramPort.format.image.nSliceHeight * 3 / 2;
 			                
-	printf( "Buffer size: %d %d %d\n", paramPort.format.video.nStride,
-	                                   paramPort.format.image.nSliceHeight,
-	                                   paramPort.nBufferSize );
-			                
     error = OMX_SetParameter( decoderHandle, OMX_IndexParamPortDefinition, &paramPort );
 	if (error != OMX_ErrorNone) {
 		fprintf(stderr, "Cannot set parameter: %d, %s\n",
@@ -1178,7 +1171,7 @@ static void init_sentinel(void)
 	untriggered = 0;
 	triggerCounter = 0;
 	untriggerCounter = 0;
-	sumThreshold = 100;
+	sumThreshold = 175;
 	eventDuration = 0;
 	videoFile = 0;
 	textFile = 0;
@@ -1226,7 +1219,7 @@ static void uninit_sentinel(void)
 
 static void uninit_decoder(void)
 {
-	printf( "uninit_decoder\n" );
+	// printf( "uninit_decoder\n" );
 	OMX_ERRORTYPE error = OMX_ErrorNone;
 	
     error = error || OMX_SendCommand( decoderHandle, OMX_CommandStateSet, OMX_StateIdle, NULL);    
@@ -1364,19 +1357,23 @@ static void ProcessComposeBuffer(void)
 static void composeLoop(void)
 {
 	OMX_ERRORTYPE error = OMX_ErrorNone;
-	const char* buffer[4096];
+	char buffer[4096];
+
+	char yuvName[100];
+	char jpgName[100];
+
+	char cmd[1000];
 	
 	FILE* file = fopen( h264_name, "rb" );
 	if ( file == 0 )
 		return;
-		
+
+	outputBuffer = 0;
 	composeBuffer = (char *)malloc( 1920 * 1088 * 3 / 2 );
 	memset( composeBuffer, 0, 1920*1088*3/2);
 	
 	int count = fread( buffer, 1, 4096, file );
 	
-	decoderBuffer->pBuffer = (void *)buffer;
-	decoderBuffer->nAllocLen = 4096;
 	decoderBuffer->nOffset = 0;
 	decoderBuffer->nInputPortIndex = 130;
 	
@@ -1385,6 +1382,7 @@ static void composeLoop(void)
 		decodeBufferFull = 1;
 
 		decoderBuffer->nFilledLen = count;
+		memcpy( decoderBuffer->pBuffer, buffer, count );
 		error = OMX_EmptyThisBuffer( decoderHandle, decoderBuffer );
 
 		if (error != OMX_ErrorNone) {
@@ -1412,7 +1410,24 @@ static void composeLoop(void)
 	
 	fclose( file );
 	
-	FILE* fraw = fopen( "composed.raw", "wb" );
+	strncpy( yuvName, h264_name, 99 );
+	strncpy( jpgName, h264_name, 99 );
+
+	char* pDot = strrchr( yuvName, '.' );
+	if ( pDot )
+		strcpy( pDot, ".yuv" );
+	else
+		strcat( yuvName, ".yuv" );
+
+	pDot = strrchr( jpgName, '.' );
+	if ( pDot )
+		strcpy( pDot, ".jpg" );
+	else
+		strcat( jpgName, ".jpg" );
+
+	sprintf( cmd, "ffmpeg -s 1920x1080 -pix_fmt yuv420p -i %s %s", yuvName, jpgName );
+			
+	FILE* fraw = fopen( yuvName, "wb" );
 	if ( fraw == 0 )
 		return;
 		
@@ -1420,6 +1435,116 @@ static void composeLoop(void)
 	fwrite( composeBuffer+1920*1088, 1, 1920*1080/4, fraw );
 	fwrite( composeBuffer+1920*1088+1920*1088/4, 1, 1920*1080/4, fraw );
 	fclose(fraw);
+	free( composeBuffer );
+
+	system( cmd );
+}
+
+static int ProcessAverageBuffer(void)
+{
+	if ( outputBuffer == 0 )
+		return 0;
+		
+	OMX_ERRORTYPE error;
+
+	OMX_BUFFERHEADERTYPE* workingBuffer = outputBuffer;
+	outputBuffer = 0;
+	
+    error = OMX_FillThisBuffer( decoderHandle, 
+                                (workingBuffer == pingBuffer) ?  pongBuffer : pingBuffer );
+            
+	if (error != OMX_ErrorNone) {
+		fprintf(stderr, "FillThisBuffer failed: %d, %s\n",
+		        errno, strerror(errno));
+		exit(EXIT_FAILURE);
+	}
+	
+	for ( int iy = 0; iy < 1080; ++iy )
+	{
+		for ( int ix = 0; ix < 1920; ++ix )
+		{
+			int indexY = 1920*iy + ix;
+			
+			averageBuffer[indexY] += workingBuffer->pBuffer[indexY];
+		}
+	}
+
+	return 1;
+}
+
+static void averagerLoop(void)
+{
+	OMX_ERRORTYPE error = OMX_ErrorNone;
+	const char* buffer[4096];
+	
+	FILE* file = fopen( h264_name, "rb" );
+	if ( file == 0 )
+		return;
+		
+	outputBuffer = 0;
+	averageBuffer = (short *)malloc( sizeof(short) * 1920 * 1088 * 3 / 2 );
+	composeBuffer = (char *)malloc( 1920 * 1088 * 3 / 2 );
+
+	memset( averageBuffer, 0, sizeof(short)*1920*1088*3/2);
+	memset( composeBuffer, 128, 1920*1088*3/2 );
+	
+	int count = fread( buffer, 1, 4096, file );
+	
+	decoderBuffer->nOffset = 0;
+	decoderBuffer->nInputPortIndex = 130;
+
+	int frameCount = 0;
+	
+	while ( count > 0 )
+	{
+		decodeBufferFull = 1;
+
+		decoderBuffer->nFilledLen = count;
+		memcpy( decoderBuffer->pBuffer, buffer, count );
+		error = OMX_EmptyThisBuffer( decoderHandle, decoderBuffer );
+
+		if (error != OMX_ErrorNone) {
+			fprintf(stderr, "Cannot EmptyThisBuffer: %d, %s\n",
+					errno, strerror(errno));
+					
+		    if ( logfile != 0 )
+		    {
+			    fflush( logfile );
+			    fclose( logfile );
+		    }
+		    
+			exit(EXIT_FAILURE);
+		}
+		
+		frameCount += ProcessAverageBuffer();
+		while ( decodeBufferFull )	
+		{		
+			usleep( 5000 );
+			frameCount += ProcessAverageBuffer();
+		}
+		
+		count = fread( buffer, 1, 4096, file );
+	}
+	
+	fclose( file );
+	
+	FILE* fraw = fopen( "averaged.yuv", "wb" );
+	if ( fraw == 0 )
+		return;
+
+	printf( "Frames: %d\n", frameCount );
+	
+	for ( int i = 0; frameCount!=0 && i < 1920*1080; ++i )
+	{
+		int scaled = 10*averageBuffer[i]/frameCount;
+		composeBuffer[i] = (scaled > 255) ? 255 : scaled;
+	}
+		
+	fwrite( composeBuffer, 1, 1920*1080, fraw );
+	fwrite( composeBuffer+1920*1088, 1, 1920*1080/4, fraw );
+	fwrite( composeBuffer+1920*1088+1920*1088/4, 1, 1920*1080/4, fraw );
+	fclose(fraw);
+	free( averageBuffer );
 	free( composeBuffer );
 }
 
@@ -1431,6 +1556,7 @@ static void usage(FILE *fp, int argc, char **argv)
 	        "Options:\n"
 	        "-d | --device name   Video device name [%s]\n"
 	        "-p | --compose file  H264 file name [%s]\n"
+			"-a | --average file  H264 file name [%s]\n"
 	        "-j | --jpeg          Output single jpeg image\n"
 	        "-m | --mpeg          Get MPEG video\n"
 	        "-h | --help          Print this message\n"
@@ -1439,15 +1565,16 @@ static void usage(FILE *fp, int argc, char **argv)
 			"-n | --noise         Noise level [%d]\n"
             "\n"
 			"Example usage: sentinel -j -d /dev/video0\n",
-	        argv[0], dev_name, h264_name, frame_count, force_count, noise_level);
+	        argv[0], dev_name, h264_name, h264_name, frame_count, force_count, noise_level);
 }
 
-static const char short_options[] = "d:p:jmc:f:n:";
+static const char short_options[] = "d:p:a:jmc:f:n:";
 
 static const struct option
         long_options[] = {
 	{ "device", required_argument, NULL, 'd' },
 	{ "compose",required_argument, NULL, 'p' },
+	{ "average",required_argument, NULL, 'a' },
 	{ "jpeg",   no_argument,       NULL, 'j' },
 	{ "mpeg",   no_argument,       NULL, 'm' },
 	{ "help",   no_argument,       NULL, 'h' },
@@ -1462,6 +1589,7 @@ int main(int argc, char **argv)
 	int getJpeg = 0;
 	int getMpeg = 0;
 	int composeH264 = 0;
+	int averageH264 = 0;
 	
 	dev_name = "/dev/video1";
 	h264_name = "video.h264";
@@ -1486,6 +1614,11 @@ int main(int argc, char **argv)
 			
 		case 'p':
 			composeH264 = 1;
+			h264_name = optarg;
+			break;
+
+		case 'a':
+			averageH264 = 1;
 			h264_name = optarg;
 			break;
 
@@ -1567,6 +1700,17 @@ int main(int argc, char **argv)
     
 		init_decoder();
 		composeLoop();
+		uninit_decoder();
+		
+		return 0;
+	}
+
+	if ( averageH264 )
+	{
+		bcm_host_init();
+    
+		init_decoder();
+		averagerLoop();
 		uninit_decoder();
 		
 		return 0;
