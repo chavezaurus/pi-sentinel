@@ -95,17 +95,20 @@ static int rateLimitEventsPerHour;
 
 static FILE *videoFile;
 static FILE *textFile;
-static FILE *logfile;
+static FILE *logfile = 0;
 
-static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t condition = PTHREAD_COND_INITIALIZER;
-static pthread_t thread_id;
+static pthread_mutex_t saveEventThreadMutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t saveEventThreadCondition = PTHREAD_COND_INITIALIZER;
+static pthread_t saveEventThread_id;
 
-static pthread_mutex_t mutex2 = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t condition2 = PTHREAD_COND_INITIALIZER;
-static pthread_t thread_id2;
+static pthread_mutex_t decodeBufferThreadMutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t decodeBufferThreadCondition = PTHREAD_COND_INITIALIZER;
+static pthread_t decodeBufferThread_id;
+
+static pthread_t runThread_id;
 
 static int thread_exit;
+static int running = 0;
 
 #define ALIGN(x, y) (((x) + ((y)-1)) & ~((y)-1))
 
@@ -220,7 +223,8 @@ static int read_frame(void)
     assert(buf.index < n_buffers);
 
     save_image(buffers[buf.index].start, buf.bytesused);
-    fprintf(logfile, "Time(s): %d.%03d\n", buf.timestamp.tv_sec, buf.timestamp.tv_usec / 1000);
+    if ( logfile )
+        fprintf(logfile, "Time(s): %d.%03d\n", buf.timestamp.tv_sec, buf.timestamp.tv_usec / 1000);
 
     if (-1 == xioctl(fd, VIDIOC_QBUF, &buf))
         errno_exit("VIDIOC_QBUF");
@@ -707,20 +711,20 @@ static void *saveEventThread(void *argin)
 {
     for (;;)
     {
-        pthread_mutex_lock(&mutex);
+        pthread_mutex_lock(&saveEventThreadMutex);
         while (!threadingJob.jobPending && !thread_exit)
-            pthread_cond_wait(&condition, &mutex);
+            pthread_cond_wait(&saveEventThreadCondition, &saveEventThreadMutex);
 
         if (thread_exit)
         {
-            pthread_mutex_unlock(&mutex);
+            pthread_mutex_unlock(&saveEventThreadMutex);
             return 0;
         }
 
         saveEventJob();
 
         threadingJob.jobPending = 0;
-        pthread_mutex_unlock(&mutex);
+        pthread_mutex_unlock(&saveEventThreadMutex);
     }
 }
 
@@ -752,7 +756,7 @@ static void terminateTrigger(unsigned int timeStamp_hi, unsigned int timeStamp_l
     if (test == 0)
         return;
 
-    pthread_mutex_lock(&mutex);
+    pthread_mutex_lock(&saveEventThreadMutex);
 
     threadingJob.eventStartTimeHi = eventTimeStamp_hi;
     threadingJob.eventStartTimeLo = eventTimeStamp_lo;
@@ -760,8 +764,8 @@ static void terminateTrigger(unsigned int timeStamp_hi, unsigned int timeStamp_l
     threadingJob.eventStopTimeLo = timeStamp_lo;
     threadingJob.jobPending = 1;
 
-    pthread_mutex_unlock(&mutex);
-    pthread_cond_signal(&condition);
+    pthread_mutex_unlock(&saveEventThreadMutex);
+    pthread_cond_signal(&saveEventThreadCondition);
 
     rateLimitBank -= 3600 / rateLimitEventsPerHour;
     if (rateLimitBank < 0)
@@ -914,7 +918,8 @@ static void ProcessDecodedBuffer(OMX_BUFFERHEADERTYPE *workingBuffer)
     processTrigger(sum, workingBuffer->nTimeStamp.nHighPart, workingBuffer->nTimeStamp.nLowPart);
     limitEventRate(workingBuffer->nTimeStamp.nLowPart);
 
-    fprintf(logfile, "Sum Count Ref: %4d %3d %x\n", sum, count, referenceFrame[100]);
+    if ( logfile )
+        fprintf(logfile, "Sum Count Ref: %4d %3d %x\n", sum, count, referenceFrame[100]);
 }
 
 static void *decodedBufferThread(void *argin)
@@ -928,9 +933,9 @@ static void *decodedBufferThread(void *argin)
 
     for (;;)
     {
-        pthread_mutex_lock(&mutex2);
+        pthread_mutex_lock(&decodeBufferThreadMutex);
         while (outputBuffer == 0 && !thread_exit)
-            pthread_cond_wait(&condition2, &mutex2);
+            pthread_cond_wait(&decodeBufferThreadCondition, &decodeBufferThreadMutex);
 
         clock_gettime(CLOCK_REALTIME, &gettime_now);
         start_time = gettime_now.tv_nsec; //Get nS value
@@ -938,7 +943,7 @@ static void *decodedBufferThread(void *argin)
         OMX_BUFFERHEADERTYPE *workingBuffer = outputBuffer;
         outputBuffer = 0;
 
-        pthread_mutex_unlock(&mutex2);
+        pthread_mutex_unlock(&decodeBufferThreadMutex);
 
         if (thread_exit)
             return 0;
@@ -977,7 +982,8 @@ static void *decodedBufferThread(void *argin)
 
         double duration = 1.0e-9 * time_difference;
 
-        fprintf(logfile, "Duration: %7.4f\n", duration);
+        if ( logfile )
+            fprintf(logfile, "Duration: %7.4f\n", duration);
     }
 }
 
@@ -995,10 +1001,10 @@ FillBufferDone(OMX_HANDLETYPE omx_handle, OMX_PTR app_data, OMX_BUFFERHEADERTYPE
         exit(EXIT_FAILURE);
     }
 
-    pthread_mutex_lock(&mutex2);
+    pthread_mutex_lock(&decodeBufferThreadMutex);
     outputBuffer = omx_buffer;
-    pthread_mutex_unlock(&mutex2);
-    pthread_cond_signal(&condition2);
+    pthread_mutex_unlock(&decodeBufferThreadMutex);
+    pthread_cond_signal(&decodeBufferThreadCondition);
 
     // if ( logfile )
     // 	fprintf( logfile, "FillBufferDone %d\n", ++count );
@@ -1023,12 +1029,13 @@ static void decodeLoop(void)
 {
     unsigned int count;
     unsigned int loopIsInfinite = 0;
+    running = 1;
 
     if (frame_count == 0)
         loopIsInfinite = 1; //infinite loop
     count = frame_count;
 
-    while (count-- > 0 || loopIsInfinite)
+    while (running && (count-- > 0 || loopIsInfinite))
     {
         for (;;)
         {
@@ -1250,17 +1257,17 @@ static void init_sentinel(void)
 
     thread_exit = 0;
 
-    int rc = pthread_create(&thread_id, NULL, &saveEventThread, NULL);
+    int rc = pthread_create(&saveEventThread_id, NULL, &saveEventThread, NULL);
     if (rc)
     {
-        fprintf(stderr, "Error creating thread_id\n");
+        fprintf(stderr, "Error creating saveEventThread_id\n");
     }
 
     outputBuffer = 0;
-    rc = pthread_create(&thread_id2, NULL, &decodedBufferThread, NULL);
+    rc = pthread_create(&decodeBufferThread_id, NULL, &decodedBufferThread, NULL);
     if (rc)
     {
-        fprintf(stderr, "Error creating thread_id2\n");
+        fprintf(stderr, "Error creating decodeBufferThread_id\n");
     }
 }
 
@@ -1268,11 +1275,11 @@ static void uninit_sentinel(void)
 {
     thread_exit = 1;
 
-    pthread_cond_signal(&condition);
-    pthread_cond_signal(&condition2);
+    pthread_cond_signal(&saveEventThreadCondition);
+    pthread_cond_signal(&decodeBufferThreadCondition);
 
-    pthread_join(thread_id, NULL);
-    pthread_join(thread_id2, NULL);
+    pthread_join(saveEventThread_id, NULL);
+    pthread_join(decodeBufferThread_id, NULL);
 
     free(testFrame);
     free(referenceFrame);
@@ -1618,6 +1625,100 @@ static void averagerLoop(void)
     free(composeBuffer);
 }
 
+static void *runThread(void *args)
+{
+    open_device();
+    init_device(0);
+    init_decoder();
+    init_sentinel();
+    readMask();
+    start_capturing();
+    decodeLoop();
+    stop_capturing();
+    uninit_sentinel();
+    uninit_decoder();
+    uninit_device();
+    close_device();
+
+    return 0;
+}
+
+static void runInteractiveLoop()
+{
+    char cmd[100];
+
+    printf( "Running Interactive\n");
+    int mum = 0;
+
+    for (;;)
+    {
+        if (!mum) printf( "Cmd: ");
+
+        fgets( cmd, 99, stdin);
+        char* token = strtok(cmd," \n\t\r");
+        if ( token == NULL )
+            continue;
+
+        if (!strcmp(token,"quit"))
+        {
+            if ( running )
+            {
+                running = 0;
+                pthread_join(runThread_id,NULL);
+                if (!mum) printf( "Stopped\n");
+            }
+
+            if (!mum) printf( "Quit\n");
+            return;
+        }
+
+        if (!strcmp(token,"start"))
+        {
+            if ( running )
+            {
+                if (!mum) printf( "Already Started\n");
+                continue;
+            }
+
+            frame_count = 0; // Run forever
+
+            int rc = pthread_create(&runThread_id, NULL, &runThread, NULL);
+            if (rc)
+            {
+                fprintf(stderr, "Error creating runThread_id\n");
+            } else {
+                if (!mum) printf( "Started\n" );
+            }
+        }
+        else if (!strcmp(token,"stop"))
+        {
+            if ( !running )
+            {
+                if (!mum) printf( "Already Stopped\n" );
+                continue;
+            }
+
+            running = 0;
+            pthread_join(runThread_id,NULL);
+            if (!mum) printf( "Stopped\n");
+        }
+        else if (!strcmp(token,"noise"))
+        {
+            token = strtok(NULL," \n\t\r");
+            int test = strtol(token, NULL, 0);
+            if ( test != 0 )
+            {
+                noise_level = test;
+                if (!mum) printf( "Noise level: %d\n", noise_level );
+            }
+        }
+        else if (!strcmp(token,"mum"))
+        {
+            mum = !mum;
+        }
+    }
+}
+
 static void usage(FILE *fp, int argc, char **argv)
 {
     fprintf(fp,
@@ -1633,12 +1734,13 @@ static void usage(FILE *fp, int argc, char **argv)
             "-c | --count         Number of frames to process [%i] - use 0 for infinite\n"
             "-f | --force         Force a trigger after [%d] frames\n"
             "-n | --noise         Noise level [%d]\n"
+            "-i | --interactive   Run interactive\n"
             "\n"
             "Example usage: sentinel -j -d /dev/video0\n",
             argv[0], dev_name, h264_name, h264_name, frame_count, force_count, noise_level);
 }
 
-static const char short_options[] = "d:p:a:jmc:f:n:";
+static const char short_options[] = "d:p:a:jmc:f:n:i";
 
 static const struct option
     long_options[] = {
@@ -1651,6 +1753,7 @@ static const struct option
         {"count", required_argument, NULL, 'c'},
         {"force", required_argument, NULL, 'f'},
         {"noise", required_argument, NULL, 'n'},
+        {"interactive", no_argument, NULL, 'i'},
         {0, 0, 0, 0}};
 
 int main(int argc, char **argv)
@@ -1659,6 +1762,7 @@ int main(int argc, char **argv)
     int getMpeg = 0;
     int composeH264 = 0;
     int averageH264 = 0;
+    int runInteractive = 0;
 
     dev_name = "/dev/video1";
     h264_name = "video.h264";
@@ -1726,10 +1830,23 @@ int main(int argc, char **argv)
                 errno_exit(optarg);
             break;
 
+        case 'i':
+            runInteractive = 1;
+            break;
+
         default:
             usage(stderr, argc, argv);
             exit(EXIT_FAILURE);
         }
+    }
+
+    if ( runInteractive )
+    {
+        bcm_host_init();
+
+        runInteractiveLoop();
+
+        return 0;
     }
 
     if (getJpeg)
@@ -1790,19 +1907,13 @@ int main(int argc, char **argv)
     logfile = fopen("logfile.txt", "w");
     bcm_host_init();
 
-    open_device();
-    init_device(0);
-    init_decoder();
-    init_sentinel();
-    readMask();
-    start_capturing();
-    decodeLoop();
-    stop_capturing();
-    uninit_sentinel();
-    uninit_decoder();
-    uninit_device();
-    close_device();
-    fprintf(stderr, "\n");
+    int rc = pthread_create(&runThread_id, NULL, &runThread, NULL);
+    if (rc)
+    {
+        fprintf(stderr, "Error creating runThread_id\n");
+    }
+
+    pthread_join(runThread_id,NULL);
 
     if (logfile != 0)
         fclose(logfile);
