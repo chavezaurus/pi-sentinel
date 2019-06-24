@@ -1647,14 +1647,17 @@ static void runInteractiveLoop()
 {
     char cmd[100];
 
-    printf( "Running Interactive\n");
+    fprintf( stderr, "Running Interactive\n");
     int mum = 0;
 
     for (;;)
     {
+        fflush(stdout);
+
         if (!mum) printf( "Cmd: ");
 
         fgets( cmd, 99, stdin);
+
         char* token = strtok(cmd," \n\t\r");
         if ( token == NULL )
             continue;
@@ -1672,11 +1675,20 @@ static void runInteractiveLoop()
             return;
         }
 
-        if (!strcmp(token,"start"))
+        if (!strcmp(token,"get_running"))
         {
             if ( running )
             {
-                if (!mum) printf( "Already Started\n");
+                if (!mum) printf( "=Yes\n");
+            } else {
+                if (!mum) printf( "=No\n");
+            }
+        }
+        else if (!strcmp(token,"start"))
+        {
+            if ( running )
+            {
+                if (!mum) printf( "=No - Already Started\n");
                 continue;
             }
 
@@ -1687,30 +1699,34 @@ static void runInteractiveLoop()
             {
                 fprintf(stderr, "Error creating runThread_id\n");
             } else {
-                if (!mum) printf( "Started\n" );
+                if (!mum) printf( "=OK\n" );
             }
         }
         else if (!strcmp(token,"stop"))
         {
             if ( !running )
             {
-                if (!mum) printf( "Already Stopped\n" );
+                if (!mum) printf( "=No - Already Stopped\n" );
                 continue;
             }
 
             running = 0;
             pthread_join(runThread_id,NULL);
-            if (!mum) printf( "Stopped\n");
+            if (!mum) printf( "=OK\n");
         }
-        else if (!strcmp(token,"noise"))
+        else if (!strcmp(token,"set_noise"))
         {
             token = strtok(NULL," \n\t\r");
             int test = strtol(token, NULL, 0);
             if ( test != 0 )
             {
                 noise_level = test;
-                if (!mum) printf( "Noise level: %d\n", noise_level );
+                if (!mum) printf( "=OK\n" );
             }
+        }
+        else if (!strcmp(token,"get_noise"))
+        {
+            if (!mum) printf( "=%d\n", noise_level);
         }
         else if (!strcmp(token,"mum"))
         {
@@ -1764,7 +1780,7 @@ int main(int argc, char **argv)
     int averageH264 = 0;
     int runInteractive = 0;
 
-    dev_name = "/dev/video1";
+    dev_name = "/dev/video2";
     h264_name = "video.h264";
 
     for (;;)
