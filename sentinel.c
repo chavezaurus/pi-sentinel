@@ -61,7 +61,7 @@ static int decodeBufferFull;
 static int frame_count = 300;
 static int frame_number = 0;
 static int force_count = -1;
-static int noise_level = 50;
+static int noise_level = 40;
 static unsigned char *testFrame;
 static unsigned char *referenceFrame;
 static unsigned char *maskFrame;
@@ -522,6 +522,7 @@ EventHandler(OMX_OUT OMX_HANDLETYPE hComponent,
              OMX_OUT OMX_PTR pEventData)
 {
     printf("EventHandler %d %x\n", eEvent, Data1);
+    fflush(stdout);
     return OMX_ErrorNone;
 }
 
@@ -645,7 +646,7 @@ static void saveEventJob(void)
     time_t unixTime = timelong;
 
     ptm = gmtime(&unixTime);
-    sprintf(nameVideoFile, "s%04d%02d%02d_%02d%02d%02d.h264",
+    sprintf(nameVideoFile, "events/s%04d%02d%02d_%02d%02d%02d.h264",
             ptm->tm_year + 1900, ptm->tm_mon + 1, ptm->tm_mday,
             ptm->tm_hour, ptm->tm_min, ptm->tm_sec);
 
@@ -653,7 +654,7 @@ static void saveEventJob(void)
     if (videoFile == 0)
         return;
 
-    sprintf(nameTextFile, "s%04d%02d%02d_%02d%02d%02d.txt",
+    sprintf(nameTextFile, "events/s%04d%02d%02d_%02d%02d%02d.txt",
             ptm->tm_year + 1900, ptm->tm_mon + 1, ptm->tm_mday,
             ptm->tm_hour, ptm->tm_min, ptm->tm_sec);
 
@@ -700,6 +701,7 @@ static void saveEventJob(void)
     printf("Event: %04d/%02d/%02d %02d:%02d:%02d\n",
            ptm->tm_year + 1900, ptm->tm_mon + 1, ptm->tm_mday,
            ptm->tm_hour, ptm->tm_min, ptm->tm_sec);
+    fflush(stdout);
 
     strcpy(pstr, "mp4");
 
@@ -1647,7 +1649,7 @@ static void runInteractiveLoop()
 {
     char cmd[100];
 
-    fprintf( stderr, "Running Interactive\n");
+    printf( "Running Interactive\n");
     int mum = 0;
 
     for (;;)

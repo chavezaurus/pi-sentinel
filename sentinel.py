@@ -1,60 +1,103 @@
 import cherrypy
 import os, os.path
 import time
+import glob
+import subprocess
+import select
 
 from threading import Thread
 from queue import Queue, Empty
 
-from subprocess import Popen, PIPE
-
-class UnexpectedEndOfStream(Exception): pass
-
-class NonBlockingStreamReader:
-
-    def __init__(self, stream):
-        '''
-        stream: the stream to read from.
-                Usually a process' stdout or stderr.
-        '''
-
-        self._s = stream
-        self._q = Queue()
-
-        def _populateQueue(stream, queue):
-            '''
-            Collect lines from 'stream' and put them in 'quque'.
-            '''
-
-            while True:
-                line = stream.readline()
-                print(line)
-                if line:
-                    n = line.find('=')
-                    if n >= 0:
-                        queue.put(line[n+1:-1])
-                else:
-                    raise UnexpectedEndOfStream
-
-        self._t = Thread(target = _populateQueue,
-                args = (self._s, self._q))
-        self._t.daemon = True
-        self._t.start() #start collecting lines from the stream
-
-    def readline(self, timeout = None):
-        try:
-            return self._q.get(block = timeout is not None,
-                    timeout = timeout)
-        except Empty:
-            return None
+from subprocess import Popen, PIPE, run
 
 class SentinelServer(object):
 
     def __init__(self):
         self.sentinelProcess = None
-    
+        self.cmdQueue = Queue()
+        self.startTime = "21:30"
+        self.stopTime  = "05:00"
+        self.sentinelRunning = False
+        self.backgroundRunning = False
+
+    def runStartSequence(self):
+        queue = Queue()
+        run(['v4l2-ctl', '-d', '/dev/video2', '-c', 'exposure_auto=3'])
+        self.handleSentinelCommand({"cmd": "start\n", "queue": queue})
+
+        time.sleep(10)
+        run(['v4l2-ctl', '-d', '/dev/video2', '-c', 'exposure_auto=1'])
+        self.sentinelRunning = True
+
+    def runStopSequence(self):
+        queue = Queue()
+        run(['v4l2-ctl', '-d', '/dev/video2', '-c', 'exposure_auto=3'])
+        time.sleep(10)
+
+        self.handleSentinelCommand({"cmd": "stop\n", "queue": queue})
+        self.sentinelRunning = False
+
+    def handleSentinelCommand(self,obj):
+        cmd = obj['cmd']
+        queue = obj['queue']
+
+        #Send command to Sentinel Process
+        self.sentinelProcess.stdin.write(cmd)
+        self.sentinelProcess.stdin.flush()
+
+        #Wait for response from Sentinel Process
+        while True:
+            if not self.y.poll(100):
+                return
+
+            line = self.sentinelProcess.stdout.readline()
+            if not line:
+                return
+
+            #True responses start with a '='
+            n = line.find('=')
+            if n >= 0:
+                queue.put({'response': line[n+1:-1]})
+                break
+            else:
+                print(line,end='')
+
+    def backgroundProcess(self):
+        while self.backgroundRunning:
+            #Dispose of miscellaneous output from Sentinel Process
+            while self.y.poll(1):
+                print(self.sentinelProcess.stdout.readline(),end='')
+
+            #Check for timed actions
+            tnow = time.strftime('%H:%M')
+            if not self.sentinelRunning and tnow == self.startTime:
+                self.runStartSequence()
+            elif self.sentinelRunning and tnow == self.stopTime:
+                self.runStopSequence()
+
+            #Check for commands from web
+            try:
+                obj = self.cmdQueue.get(timeout=1)
+                self.handleSentinelCommand(obj)
+            except:
+                pass
+
+    def funnelCmd( self, cmd ):
+        responseQueue = Queue()
+        self.cmdQueue.put( {"cmd": cmd, "queue": responseQueue})
+        try:
+            response = responseQueue.get(timeout=1.0)
+        except:
+            response = {"response": None}
+        return response
+        
     def connectToSentinel(self):
         self.sentinelProcess = Popen(['./sentinel.bin', '-i'], stdin=PIPE, stdout=PIPE, shell=False, universal_newlines=True)
-        self.nsbr = NonBlockingStreamReader(self.sentinelProcess.stdout)
+        self.y = select.poll()
+        self.y.register(self.sentinelProcess.stdout, select.POLLIN)
+        self.background = Thread(target = self.backgroundProcess)
+        self.backgroundRunning = True
+        self.background.start()
 
     @cherrypy.expose
     def index(self):
@@ -63,48 +106,38 @@ class SentinelServer(object):
     @cherrypy.expose
     @cherrypy.tools.json_out()
     def start(self):
-        self.sentinelProcess.stdin.write("start\n")
-        self.sentinelProcess.stdin.flush()
-        response = self.nsbr.readline(1.0)
-        return {"response": response}
+        print("start")
+        return self.funnelCmd("start\n")
 
     @cherrypy.expose
     @cherrypy.tools.json_out()
     def stop(self):
-        self.sentinelProcess.stdin.write("stop\n")
-        self.sentinelProcess.stdin.flush()
-        response = self.nsbr.readline(1.0)
-        return {"response": response}
+        print("stop")
+        return self.funnelCmd("stop\n")
 
     @cherrypy.expose
     @cherrypy.tools.json_out()
     def get_running(self):
-        print("Get_running")
-        self.sentinelProcess.stdin.write("get_running\n")
-        self.sentinelProcess.stdin.flush()
-        response = self.nsbr.readline(1.0)
-        return {"response": response}
+        print("get_running")
+        return self.funnelCmd("get_running\n")
 
     @cherrypy.expose
-    @cherrypy.tools.json_in()
     @cherrypy.tools.json_out()
-    def cmd(self):
-        data = cherrypy.request.json
-        print(data)
-        cmd = data["cmd"]
-        if cmd == "start":
-            return {"running": True}
+    def events(self):
+        print("events")
+        mp4files = glob.glob("events/s*.mp4")
+        mp4files = list(map(os.path.basename,mp4files))
+        return mp4files
 
-        if cmd == "stop":
-            return {"running": False}
-
-        return {"running": False}
-
-
-conf =  { '/': {
-            'tools.staticdir.root': os.path.abspath(os.getcwd()),
-            'tools.staticdir.on': True,
-            'tools.staticdir.dir': 'static'
+conf =  { 
+            '/': {
+                'tools.staticdir.root': os.path.abspath(os.getcwd()),
+                'tools.staticdir.on': True,
+                'tools.staticdir.dir': 'public'
+            },
+            '/events': {
+                'tools.staticdir.on': True,
+                'tools.staticdir.dir': 'events'
             }
         }
 
@@ -114,3 +147,4 @@ if __name__ == '__main__':
     server.connectToSentinel()
     cherrypy.config.update({'server.socket_host': '0.0.0.0', 'server.socket_port': 9090})
     cherrypy.quickstart(server, '/', conf)
+    server.backgroundRunning = False
