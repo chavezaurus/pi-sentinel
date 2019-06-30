@@ -1,0 +1,47 @@
+.header {
+    grid-area: xheader;
+    background: wheat;
+    text-align: center;
+    padding: 20px 0;
+}
+
+.sidebar {
+    grid-area: xsidebar;
+    background: rgb(61, 79, 93);
+    color: #fff;
+    padding: 20px 0;
+    justify-self: center;
+}
+
+.content {
+    background: wheat;
+    grid-area: xcontent;
+    text-align: center;
+    padding: 20px 0;
+}
+
+.footer {
+    background: wheat;
+    grid-area: xfooter;
+    text-align: center;
+    padding: 20px 0;
+}
+
+.grid-container {
+  display: grid;
+  grid-template-columns: 1fr 4fr;
+  grid-template-rows: 40px auto 40px;
+  height: 100vh;
+  width: 100vw;
+  grid-template-areas:
+    'xheader  xcontent'
+    'xsidebar xcontent'
+    'xfooter  xfooter';
+  grid-gap: 2px;
+  background-color: rgb(61, 79, 93);
+}
+
+.rselect {
+    background: rgb(110,110,110);
+}
+  

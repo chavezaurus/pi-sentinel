@@ -18,7 +18,6 @@ class SentinelServer(object):
         self.startTime = "21:30"
         self.stopTime  = "05:00"
         self.sentinelRunning = False
-        self.backgroundRunning = False
 
     def runStartSequence(self):
         queue = Queue()
@@ -47,7 +46,7 @@ class SentinelServer(object):
 
         #Wait for response from Sentinel Process
         while True:
-            if not self.y.poll(100):
+            if not self.y.poll(500):
                 return
 
             line = self.sentinelProcess.stdout.readline()
@@ -63,7 +62,11 @@ class SentinelServer(object):
                 print(line,end='')
 
     def backgroundProcess(self):
-        while self.backgroundRunning:
+        #Wait for engine to start up
+        while cherrypy.engine.state != cherrypy.engine.states.STARTED:
+            time.sleep(1)
+
+        while cherrypy.engine.state == cherrypy.engine.states.STARTED:
             #Dispose of miscellaneous output from Sentinel Process
             while self.y.poll(1):
                 print(self.sentinelProcess.stdout.readline(),end='')
@@ -96,7 +99,6 @@ class SentinelServer(object):
         self.y = select.poll()
         self.y.register(self.sentinelProcess.stdout, select.POLLIN)
         self.background = Thread(target = self.backgroundProcess)
-        self.backgroundRunning = True
         self.background.start()
 
     @cherrypy.expose
@@ -147,4 +149,3 @@ if __name__ == '__main__':
     server.connectToSentinel()
     cherrypy.config.update({'server.socket_host': '0.0.0.0', 'server.socket_port': 9090})
     cherrypy.quickstart(server, '/', conf)
-    server.backgroundRunning = False
