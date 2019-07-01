@@ -1,20 +1,34 @@
+table {
+    cursor: pointer;
+}
+
 .header {
     grid-area: xheader;
-    background: wheat;
+    background: rgb(61, 79, 93);
     text-align: center;
     padding: 20px 0;
 }
 
-.sidebar {
-    grid-area: xsidebar;
+.controls {
+    grid-area: xcontrols;
     background: rgb(61, 79, 93);
     color: #fff;
     padding: 20px 0;
     justify-self: center;
 }
 
+.stable {
+    grid-area: xstable;
+    background: rgb(61, 79, 93);
+    color: #fff;
+    max-height: 100%;
+    overflow-y: auto;
+    overflow-x: visible;
+    justify-self: center;
+}
+
 .content {
-    background: wheat;
+    background: black;
     grid-area: xcontent;
     text-align: center;
     padding: 20px 0;
@@ -29,19 +43,34 @@
 
 .grid-container {
   display: grid;
-  grid-template-columns: 1fr 4fr;
-  grid-template-rows: 40px auto 40px;
-  height: 100vh;
-  width: 100vw;
+  grid-template-columns: 380px auto;
+  grid-template-rows: auto auto 1fr 40px;
+  height: 100%;
+  width: 100%;
   grid-template-areas:
     'xheader  xcontent'
-    'xsidebar xcontent'
+    'xcontrols xcontent'
+    'xstable   xcontent'
     'xfooter  xfooter';
   grid-gap: 2px;
   background-color: rgb(61, 79, 93);
+  position: absolute;
 }
 
 .rselect {
     background: rgb(110,110,110);
 }
   
+.hello {
+    padding: 20px 0;
+}
+
+.redCell{
+    color: rgb(255,80,80);
+}
+.whiteCell{
+    color:white;
+}
+.goldCell {
+    color: gold;
+}

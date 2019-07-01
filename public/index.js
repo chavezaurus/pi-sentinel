@@ -1,37 +1,62 @@
-var root = document.body
+var root = document.body;
 
-var count = 0 // added a variable
+var count = 0; // added a variable
+
+var tableItems = [];
+
+var selectedRow = null;
 
 let Increment = function(e) {
     count++;
 }
 
-var Hello = {
+let UpdateEvents = function(fromDir) {
+    m.request({
+        method: "POST",
+        url: fromDir,
+        body: tableItems
+    })
+    .then(function(result) {
+        result.sort();
+        tableItems = result.map( function(item) {
+            return {event: item, from: fromDir, to: fromDir, selected: false};
+        });
+
+        selectedRow = null;
+    })
+    .catch(function(e) {
+        console.log( e.code );
+    })
+}
+
+var DoTable = {
     view: function() {
-        return m("main", [
-            m("h1", {class: "title"}, "Pi Sentinel"),
-            // changed the next line
-            m("button.pure-button", {onclick: Increment}, count + " clicks"),
+        return m("pure-button-group", {role: "group", "aria-label": "Group"}, [
+            m("button.pure-button", {onclick: function() {UpdateEvents("events")}}, "Events"),
+            m("button.pure-button", {onclick: function() {UpdateEvents("saved")}},  "Saved"),
+            m("button.pure-button", {onclick: function() {UpdateEvents("trash")}},  "Trash"),
         ])
     }
 }
 
-var tableItems = [
-    {event: "s20190401_123456.mp4", keep: "Yes",   selected: false},
-    {event: "s20190401_123556.mp4", keep: "Yes",   selected: false},
-    {event: "s20190401_123656.mp4", keep: "Yes",   selected: false},
-    {event: "s20190401_123756.mp4", keep: "Yes",   selected: false},
-    {event: "s20190401_123856.mp4", keep: "Yes",   selected: false}
-]
-
-var selectedRow = null;
+var videoSource = '';
 
 let ClickTable = function(e) {
     let row = e.target.parentElement.rowIndex-1;
     let column = e.target.cellIndex;
 
     if ( column === 1 ) {
-        tableItems[row].keep = tableItems[row].keep === "Yes" ? "No" : "Yes";
+        var toDir = tableItems[row].to;
+
+        if ( toDir === "events" ) {
+            toDir = "trash";
+        } else if ( toDir === "trash" ) {
+            toDir = "saved";
+        } else if ( toDir === "saved" ) {
+            toDir = "events";
+        }
+
+        tableItems[row].to = toDir;
     }
 
     if ( column === 0 ) {
@@ -40,31 +65,52 @@ let ClickTable = function(e) {
         }
 
         selectedRow = row;
-        tableItems[selectedRow].selected = true;
+        let rowObj = tableItems[row];
+        rowObj.selected = true;
+        videoSource = rowObj.from+'/'+rowObj.event;
     }
 }
 
-var Table = {
+let Video = {
     view: function() {
+        return m('video', {
+            autoplay: true,
+            style: 'sidth: 1920, margin: 0.5rem',
+            controls: true,
+            src: videoSource,
+        })
+    }
+}
+
+let Table = {
+    view: function() {
+        let toTable = {
+            "events": "td.whiteCell",
+            "trash":  "td.redCell",
+            "saved":  "td.goldCell" };
+
         return m("table.pure-table", [
             m("thead", m("tr", [
                 m("th", "Event Videos"),
-                m("th", "Keep")
+                m("th", "Move-To")
             ])),
             m("tbody", {onclick: ClickTable}, tableItems.map( function(item,index){
-                return [m(item.selected ? "tr.rselect" : "tr", [m("td", item.event), m("td", item.keep)])]
+                return [m(item.selected ? "tr.rselect" : "tr", 
+                        [m("td", item.event), 
+                        m(toTable[item.to], item.to)])];
             }))
         ]
-        )
+        );
     }
 }
 
-var Layout = {
+let Layout = {
     view: function() {
         return m("div.grid-container", [
-            m("div.header", "Header"),
-            m("div.sidebar", [m(Hello), m(Table)]),
-            m("div.content", "Content"),
+            m("h1.header", "Pi Sentinel"),
+            m("div.controls", m(DoTable)),
+            m("div.stable", m(Table)),
+            m("div.content", m(Video)),
             m("div.footer", "Footer")
         ]);
     }

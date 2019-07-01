@@ -19,6 +19,13 @@ class SentinelServer(object):
         self.stopTime  = "05:00"
         self.sentinelRunning = False
 
+        if not os.path.exists("events"):
+            os.mkdir("events")
+        if not os.path.exists("saved"):
+            os.mkdir("saved")
+        if not os.path.exists("trash"):
+            os.mkdir("trash")
+
     def runStartSequence(self):
         queue = Queue()
         run(['v4l2-ctl', '-d', '/dev/video2', '-c', 'exposure_auto=3'])
@@ -123,11 +130,52 @@ class SentinelServer(object):
         print("get_running")
         return self.funnelCmd("get_running\n")
 
+    def relocateCurrent(self,currentData):
+        for item in currentData:
+            dfrom = item["from"]
+            dto = item["to"]
+
+            if dfrom != dto:
+                root = os.path.splitext(item["event"])[0]
+                fromPath = os.path.join(dfrom, root)
+                toPath = os.path.join(dto, root)
+                os.rename( fromPath+".mp4",  toPath+".mp4" )
+                os.rename( fromPath+".h264", toPath+".h264")
+                os.rename( fromPath+".txt",  toPath+".txt")
+
     @cherrypy.expose
+    @cherrypy.tools.json_in()
     @cherrypy.tools.json_out()
     def events(self):
         print("events")
+        data = cherrypy.request.json
+        self.relocateCurrent(data)
+
         mp4files = glob.glob("events/s*.mp4")
+        mp4files = list(map(os.path.basename,mp4files))
+        return mp4files
+
+    @cherrypy.expose
+    @cherrypy.tools.json_in()
+    @cherrypy.tools.json_out()
+    def saved(self):
+        print("saved")
+        data = cherrypy.request.json
+        self.relocateCurrent(data)
+
+        mp4files = glob.glob("saved/s*.mp4")
+        mp4files = list(map(os.path.basename,mp4files))
+        return mp4files
+
+    @cherrypy.expose
+    @cherrypy.tools.json_in()
+    @cherrypy.tools.json_out()
+    def trash(self):
+        print("trash")
+        data = cherrypy.request.json
+        self.relocateCurrent(data)
+
+        mp4files = glob.glob("trash/s*.mp4")
         mp4files = list(map(os.path.basename,mp4files))
         return mp4files
 
@@ -140,6 +188,14 @@ conf =  {
             '/events': {
                 'tools.staticdir.on': True,
                 'tools.staticdir.dir': 'events'
+            },
+            '/saved': {
+                'tools.staticdir.on': True,
+                'tools.staticdir.dir': 'saved'
+            },
+            '/trash': {
+                'tools.staticdir.on': True,
+                'tools.staticdir.dir': 'trash'
             }
         }
 
