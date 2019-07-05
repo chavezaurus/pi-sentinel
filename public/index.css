@@ -35,9 +35,11 @@ table {
 }
 
 .footer {
-    background: wheat;
+    background: black;
     grid-area: xfooter;
     text-align: center;
+    text-justify: center;
+    color: white;
     padding: 20px 0;
 }
 
@@ -48,10 +50,10 @@ table {
   height: 100%;
   width: 100%;
   grid-template-areas:
-    'xheader  xcontent'
+    'xheader   xcontent'
     'xcontrols xcontent'
     'xstable   xcontent'
-    'xfooter  xfooter';
+    'xstable   xfooter';
   grid-gap: 2px;
   background-color: rgb(61, 79, 93);
   position: absolute;
@@ -73,4 +75,33 @@ table {
 }
 .goldCell {
     color: gold;
+}
+
+.control-container {
+    display: grid;
+    grid-gap: 1rem;
+    grid-template-columns: auto auto;
+    align-items: center;
+}
+
+.form-container {
+    display: grid;
+    grid-gap: 1rem;
+    grid-template-columns: auto;
+    align-items: center;
+}
+
+.citem-left {
+    justify-self: end;
+}
+
+.citem-right {
+    justify-self: start;
+}
+
+.input {
+    justify-self: start;
+    width: 110px;
+    color: black;
+    text-align: center;
 }

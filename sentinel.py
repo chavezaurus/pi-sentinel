@@ -17,7 +17,6 @@ class SentinelServer(object):
         self.cmdQueue = Queue()
         self.startTime = "21:30"
         self.stopTime  = "05:00"
-        self.sentinelRunning = False
 
         if not os.path.exists("events"):
             os.mkdir("events")
@@ -27,24 +26,51 @@ class SentinelServer(object):
             os.mkdir("trash")
 
     def runStartSequence(self):
-        queue = Queue()
-        run(['v4l2-ctl', '-d', '/dev/video2', '-c', 'exposure_auto=3'])
-        self.handleSentinelCommand({"cmd": "start\n", "queue": queue})
+        response = self.funnelCmd("get_running")
+        if response["response"] == "Yes":
+            return
 
-        time.sleep(10)
-        run(['v4l2-ctl', '-d', '/dev/video2', '-c', 'exposure_auto=1'])
-        self.sentinelRunning = True
+        response = self.funnelCmd("start")
+        if response["response"] != "OK":
+            print("Start failed")
+            return
 
     def runStopSequence(self):
-        queue = Queue()
-        run(['v4l2-ctl', '-d', '/dev/video2', '-c', 'exposure_auto=3'])
-        time.sleep(10)
+        response = self.funnelCmd("get_running")
+        if response["response"] == "No":
+            return
+            
+        response = self.funnelCmd("stop")
+        if response["response"] != "OK":
+            print("Stop failed")
+            return
 
-        self.handleSentinelCommand({"cmd": "stop\n", "queue": queue})
-        self.sentinelRunning = False
+    def toggleStartStop(self):
+        response = self.funnelCmd("get_running")
+        if response["response"] == "Yes":
+            self.runStopSequence()
+        elif response["response"] == "No":
+            self.runStartSequence()
+        else:
+            print("Toggle Start/Stop failed")
+
+    def checkExposure(self):
+        response = self.funnelCmd("get_running")
+        if response["response"] != "Yes":
+            return
+
+        response = self.funnelCmd("get_frame_rate")
+        if float(response["response"]) < 28.0:
+            run(['v4l2-ctl', '-d', '/dev/video2', '-c', 'exposure_auto=1'])
+            run(['v4l2-ctl', '-d', '/dev/video2', '-c', 'exposure_absolute=333'])
+            return
+
+        response = self.funnelCmd("get_zenith_amplitude")
+        if float(response["response"]) > 230.0:
+            run(['v4l2-ctl', '-d', '/dev/video2', '-c', 'exposure_auto=3'])
 
     def handleSentinelCommand(self,obj):
-        cmd = obj['cmd']
+        cmd = obj['cmd']+"\n"
         queue = obj['queue']
 
         #Send command to Sentinel Process
@@ -54,10 +80,12 @@ class SentinelServer(object):
         #Wait for response from Sentinel Process
         while True:
             if not self.y.poll(500):
+                print("handleSentinelCommand: poll failed")
                 return
 
             line = self.sentinelProcess.stdout.readline()
             if not line:
+                print("handleSentinelCommand: readline failed")
                 return
 
             #True responses start with a '='
@@ -73,21 +101,34 @@ class SentinelServer(object):
         while cherrypy.engine.state != cherrypy.engine.states.STARTED:
             time.sleep(1)
 
+        lastTime = 'XX:XX'
+        while cherrypy.engine.state == cherrypy.engine.states.STARTED:
+            #Check for timed actions
+            tnow = time.strftime('%H:%M')
+            if tnow != lastTime:
+                if tnow == self.startTime:
+                    self.runStartSequence()
+                elif tnow == self.stopTime:
+                    self.runStopSequence()
+                else:
+                    self.checkExposure()
+
+            lastTime = tnow
+            time.sleep(10)
+
+    def commProcess(self):
+        #Wait for engine to start up
+        while cherrypy.engine.state != cherrypy.engine.states.STARTED:
+            time.sleep(1)
+
         while cherrypy.engine.state == cherrypy.engine.states.STARTED:
             #Dispose of miscellaneous output from Sentinel Process
             while self.y.poll(1):
                 print(self.sentinelProcess.stdout.readline(),end='')
 
-            #Check for timed actions
-            tnow = time.strftime('%H:%M')
-            if not self.sentinelRunning and tnow == self.startTime:
-                self.runStartSequence()
-            elif self.sentinelRunning and tnow == self.stopTime:
-                self.runStopSequence()
-
             #Check for commands from web
             try:
-                obj = self.cmdQueue.get(timeout=1)
+                obj = self.cmdQueue.get(timeout=10)
                 self.handleSentinelCommand(obj)
             except:
                 pass
@@ -107,6 +148,8 @@ class SentinelServer(object):
         self.y.register(self.sentinelProcess.stdout, select.POLLIN)
         self.background = Thread(target = self.backgroundProcess)
         self.background.start()
+        self.comm = Thread(target = self.commProcess)
+        self.comm.start()
 
     @cherrypy.expose
     def index(self):
@@ -116,19 +159,19 @@ class SentinelServer(object):
     @cherrypy.tools.json_out()
     def start(self):
         print("start")
-        return self.funnelCmd("start\n")
+        return self.funnelCmd("start")
 
     @cherrypy.expose
     @cherrypy.tools.json_out()
     def stop(self):
         print("stop")
-        return self.funnelCmd("stop\n")
+        return self.funnelCmd("stop")
 
     @cherrypy.expose
     @cherrypy.tools.json_out()
     def get_running(self):
         print("get_running")
-        return self.funnelCmd("get_running\n")
+        return self.funnelCmd("get_running")
 
     def relocateCurrent(self,currentData):
         for item in currentData:
@@ -178,6 +221,61 @@ class SentinelServer(object):
         mp4files = glob.glob("trash/s*.mp4")
         mp4files = list(map(os.path.basename,mp4files))
         return mp4files
+
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
+    def get_state(self):
+        print("get_state")
+        response = {}
+        r = self.funnelCmd("get_frame_rate")
+        response["frameRate"] = float(r["response"])
+        r = self.funnelCmd("get_zenith_amplitude")
+        response["zenithAmplitude"] = int(r["response"])
+        r = self.funnelCmd("get_noise")
+        response["noiseThreshold"] = int(r["response"])
+        r = self.funnelCmd("get_sum_threshold")
+        response["sumThreshold"] = int(r["response"])
+        r = self.funnelCmd("get_max_events_per_hour")
+        response["eventsPerHour"] = int(r["response"])
+        r = self.funnelCmd("get_running")
+        response["running"] = r["response"]
+        response["startTime"] = {"h": int(self.startTime[0:2]), "m": int(self.startTime[3:5])}
+        response["stopTime"]  = {"h": int(self.stopTime[0:2]),  "m": int(self.stopTime[3:5])}
+        return response
+
+    @cherrypy.expose
+    @cherrypy.tools.json_in()
+    def set_state(self):
+        print("set_state")
+        data = cherrypy.request.json
+        r = self.funnelCmd("set_noise %d" % data["noiseThreshold"])
+        if r["response"] != "OK":
+            return r
+        r = self.funnelCmd("set_sum_threshold %d" % data["sumThreshold"])
+        if r["response"] != "OK":
+            return r
+        r = self.funnelCmd("set_max_events_per_hour %d" % data["eventsPerHour"])
+        if r["response"] != "OK":
+            return r
+        start = data["startTime"]
+        stop = data["stopTime"]
+        self.startTime = "%02d:%02d" % (start["h"],start["m"])
+        self.stopTime  = "%02d:%02d" % (stop["h"], stop["m"])
+
+        return { "response": "OK" }
+
+    @cherrypy.expose
+    def toggle(self):
+        self.toggleStartStop()
+        return { "response": "OK"}
+
+    @cherrypy.expose
+    def force_trigger(self):
+        r = self.funnelCmd("get_running")
+        if r["response"] != "Yes":
+            return { "response": "No"}
+
+        return self.funnelCmd("force_trigger")
 
 conf =  { 
             '/': {

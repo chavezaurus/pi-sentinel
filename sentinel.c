@@ -85,13 +85,16 @@ static int triggered;
 static int untriggered;
 static int triggerCounter;
 static int untriggerCounter;
-static int sumThreshold;
+static int sumThreshold = 175;
+
 static int eventDuration;
 static unsigned int eventTimeStamp_hi;
 static unsigned int eventTimeStamp_lo;
 static int rateLimitLastSecond;
 static int rateLimitBank;
-static int rateLimitEventsPerHour;
+static int rateLimitEventsPerHour = 5;
+
+static double frameRate = 30.0;
 
 static FILE *videoFile;
 static FILE *textFile;
@@ -675,13 +678,16 @@ static void saveEventJob(void)
     }
 
     int frameCount = 0;
+    double xCentroid = 0.0;
+    double yCentroid = 0.0;
+
     while (sumIndex != stopIndex)
     {
         double delta = 1.0e-6 * ((int)frameTimestamps[frameIndex] - (int)arg.eventStartTimeLo);
         int counts = sumCounts[sumIndex];
         int sum = sumBuffers[sumIndex];
-        double xCentroid = (sum == 0) ? 0.0 : (double)xSumBuffers[sumIndex] / sum;
-        double yCentroid = (sum == 0) ? 0.0 : (double)ySumBuffers[sumIndex] / sum;
+        xCentroid = (sum == 0) ? xCentroid : (double)xSumBuffers[sumIndex] / sum;
+        yCentroid = (sum == 0) ? yCentroid : (double)ySumBuffers[sumIndex] / sum;
         fprintf(textFile, "%3d %7.3f %6d %6d %7.1f %7.1f\n",
                 ++frameCount, delta, counts, sum, xCentroid, yCentroid);
 
@@ -845,6 +851,24 @@ static void limitEventRate(unsigned microseconds)
     }
 }
 
+static void measureFrameRate(unsigned microseconds)
+{
+    static unsigned int lastMicrosecond = 0;
+
+    if ( microseconds > lastMicrosecond )
+    {
+        unsigned delta = microseconds - lastMicrosecond;
+        if ( delta > 20000 && delta < 100000 )
+        {
+            double rate = 1.0e6 / delta;
+
+            frameRate = 0.99 * frameRate + 0.01 * rate;
+        }
+    }
+
+    lastMicrosecond = microseconds;
+}
+
 static void ProcessDecodedBuffer(OMX_BUFFERHEADERTYPE *workingBuffer)
 {
     static int countn = 0;
@@ -919,6 +943,7 @@ static void ProcessDecodedBuffer(OMX_BUFFERHEADERTYPE *workingBuffer)
 
     processTrigger(sum, workingBuffer->nTimeStamp.nHighPart, workingBuffer->nTimeStamp.nLowPart);
     limitEventRate(workingBuffer->nTimeStamp.nLowPart);
+    measureFrameRate(workingBuffer->nTimeStamp.nLowPart);
 
     if ( logfile )
         fprintf(logfile, "Sum Count Ref: %4d %3d %x\n", sum, count, referenceFrame[100]);
@@ -1242,13 +1267,11 @@ static void init_sentinel(void)
     untriggered = 0;
     triggerCounter = 0;
     untriggerCounter = 0;
-    sumThreshold = 175;
     eventDuration = 0;
     videoFile = 0;
     textFile = 0;
 
     rateLimitLastSecond = 0;
-    rateLimitEventsPerHour = 5;
     rateLimitBank = 3600;
 
     threadingJob.eventStartTimeHi = 0;
@@ -1286,6 +1309,26 @@ static void uninit_sentinel(void)
     free(testFrame);
     free(referenceFrame);
     free(maskFrame);
+
+    testFrame = 0;
+    referenceFrame = 0;
+    maskFrame = 0;
+}
+
+static int zenithAmplitude(void)
+{
+    if ( referenceFrame == 0 )
+        return -1;
+
+    int sum = 0;
+
+    for ( int row = 170; row <= 190; row += 10)
+    {
+        for ( int col = 310; col <= 330; col += 10 )
+            sum += referenceFrame[640*row + col];
+    }
+
+    return sum / 9;
 }
 
 static void uninit_decoder(void)
@@ -1681,16 +1724,16 @@ static void runInteractiveLoop()
         {
             if ( running )
             {
-                if (!mum) printf( "=Yes\n");
+                printf( "=Yes\n" );
             } else {
-                if (!mum) printf( "=No\n");
+                printf( "=No\n" );
             }
         }
         else if (!strcmp(token,"start"))
         {
             if ( running )
             {
-                if (!mum) printf( "=No - Already Started\n");
+                printf( "=No - Already Started\n" );
                 continue;
             }
 
@@ -1701,20 +1744,20 @@ static void runInteractiveLoop()
             {
                 fprintf(stderr, "Error creating runThread_id\n");
             } else {
-                if (!mum) printf( "=OK\n" );
+                printf( "=OK\n" );
             }
         }
         else if (!strcmp(token,"stop"))
         {
             if ( !running )
             {
-                if (!mum) printf( "=No - Already Stopped\n" );
+                printf( "=No - Already Stopped\n" );
                 continue;
             }
 
             running = 0;
             pthread_join(runThread_id,NULL);
-            if (!mum) printf( "=OK\n");
+            printf( "=OK\n");
         }
         else if (!strcmp(token,"set_noise"))
         {
@@ -1723,12 +1766,53 @@ static void runInteractiveLoop()
             if ( test != 0 )
             {
                 noise_level = test;
-                if (!mum) printf( "=OK\n" );
+                printf( "=OK\n" );
             }
         }
         else if (!strcmp(token,"get_noise"))
         {
-            if (!mum) printf( "=%d\n", noise_level);
+            printf( "=%d\n", noise_level);
+        }
+        else if (!strcmp(token,"set_sum_threshold"))
+        {
+            token = strtok(NULL," \n\t\r");
+            int test = strtol(token, NULL, 0);
+            if ( test != 0 )
+            {
+                sumThreshold = test;
+                printf( "=OK\n" );
+            }
+        }
+        else if (!strcmp(token,"get_sum_threshold"))
+        {
+            printf( "=%d\n", sumThreshold);
+        }
+        else if (!strcmp(token,"set_max_events_per_hour"))
+        {
+            token = strtok(NULL," \n\t\r");
+            int test = strtol(token, NULL, 0);
+            if ( test != 0 )
+            {
+                rateLimitEventsPerHour = test;
+                printf( "=OK\n" );
+            }
+        }
+        else if (!strcmp(token,"get_max_events_per_hour"))
+        {
+            printf("=%d\n", rateLimitEventsPerHour);
+        }
+        else if (!strcmp(token,"get_frame_rate"))
+        {
+            printf("=%5.2f\n", frameRate );
+        }
+        else if (!strcmp(token,"get_zenith_amplitude"))
+        {
+            printf("=%d\n", zenithAmplitude() );
+        }
+        else if (!strcmp(token,"force_trigger"))
+        {
+            force_count = frame_number + 30;
+            printf( "=OK\n" );
         }
         else if (!strcmp(token,"mum"))
         {
