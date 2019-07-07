@@ -143,7 +143,7 @@ var sentinelState = {
     sumThreshold: 175,
     eventsPerHour: 5,
     frameRate: 30.0,
-    zenithAmplitude: -1,
+    zenithAmplitude: 0.0,
     running: "No"
 }
 
@@ -224,15 +224,15 @@ let TimerPickers = {
             m("div.citem-right", m(TimePicker, {time: sentinelState.stopTime,   increment: 5})),
 
             m("label.citem-left", "Noise Threshold:"),
-            m("input.input[type=number]",{oninput:function(e){sentinelState.noiseThreshold=e.target.value},value: sentinelState.noiseThreshold}),
+            m("input.input[type=number]",{oninput:function(e){sentinelState.noiseThreshold=Number(e.target.value)},value: sentinelState.noiseThreshold}),
 
             m("label.citem-left", "Trigger Threshold:"),
-            m("input.input[type=number]",{oninput:function(e){sentinelState.sumThreshold=e.target.value},value: sentinelState.sumThreshold}),
+            m("input.input[type=number]",{oninput:function(e){sentinelState.sumThreshold=Number(e.target.value)},value: sentinelState.sumThreshold}),
 
             m("label.citem-left", "Max Events Per Hour:"),
-            m("input.input[type=number]",{oninput:function(e){sentinelState.eventsPerHour=e.target.value},value: sentinelState.eventsPerHour}),
+            m("input.input[type=number]",{oninput:function(e){sentinelState.eventsPerHour=Number(e.target.value)},value: sentinelState.eventsPerHour}),
 
-            m("button.pure-button.[type=submit]", "Submit")
+            m("button.pure-button.citem-submit.[type=submit]", "Submit")
         ]);
     }
 }

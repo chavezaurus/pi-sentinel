@@ -60,7 +60,7 @@ class SentinelServer(object):
             return
 
         response = self.funnelCmd("get_frame_rate")
-        if float(response["response"]) < 28.0:
+        if float(response["response"]) < 19.0:
             run(['v4l2-ctl', '-d', '/dev/video2', '-c', 'exposure_auto=1'])
             run(['v4l2-ctl', '-d', '/dev/video2', '-c', 'exposure_absolute=333'])
             return
@@ -230,7 +230,7 @@ class SentinelServer(object):
         r = self.funnelCmd("get_frame_rate")
         response["frameRate"] = float(r["response"])
         r = self.funnelCmd("get_zenith_amplitude")
-        response["zenithAmplitude"] = int(r["response"])
+        response["zenithAmplitude"] = float(r["response"])
         r = self.funnelCmd("get_noise")
         response["noiseThreshold"] = int(r["response"])
         r = self.funnelCmd("get_sum_threshold")

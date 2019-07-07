@@ -9,6 +9,10 @@ table {
     padding: 20px 0;
 }
 
+.header h1 {
+    color: wheat;
+}
+
 .controls {
     grid-area: xcontrols;
     background: rgb(61, 79, 93);
@@ -97,6 +101,10 @@ table {
 
 .citem-right {
     justify-self: start;
+}
+
+.citem-submit {
+    grid-column: 1 / 3;
 }
 
 .input {

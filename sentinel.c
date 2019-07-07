@@ -95,6 +95,7 @@ static int rateLimitBank;
 static int rateLimitEventsPerHour = 5;
 
 static double frameRate = 30.0;
+static double zenithAmplitude = 0.0;
 
 static FILE *videoFile;
 static FILE *textFile;
@@ -711,7 +712,9 @@ static void saveEventJob(void)
 
     strcpy(pstr, "mp4");
 
-    sprintf(nameSystemCmd, "MP4Box -add %s -fps 30 -quiet %s", nameVideoFile, nameMp4File);
+    int iFrameRate = round(frameRate);
+
+    sprintf(nameSystemCmd, "MP4Box -add %s -fps %d -quiet %s", nameVideoFile, iFrameRate, nameMp4File);
     system(nameSystemCmd);
 }
 
@@ -787,14 +790,16 @@ static void processTrigger(int sum, unsigned int timeStamp_hi, unsigned int time
 
     if (triggered == 0)
     {
-        if (sum >= sumThreshold)
+        if (frame_number == force_count)
+        {
+            initiateTrigger(timeStamp_hi, timeStamp_lo);
+        }
+        else if (sum >= sumThreshold)
         {
             ++triggerCounter;
             if (triggerCounter >= 2)
                 initiateTrigger(timeStamp_hi, timeStamp_lo);
         }
-        else if (frame_number == force_count)
-            initiateTrigger(timeStamp_hi, timeStamp_lo);
         else
             triggerCounter = 0;
     }
@@ -867,6 +872,24 @@ static void measureFrameRate(unsigned microseconds)
     }
 
     lastMicrosecond = microseconds;
+}
+
+static void measureZenithAmplitude()
+{
+    if ( testFrame == 0 )
+        return;
+
+    int sum = 0;
+
+    for ( int row = 170; row <= 190; row += 10)
+    {
+        for ( int col = 310; col <= 330; col += 10 )
+            sum += testFrame[640*row + col];
+    }
+
+    double average = sum / 9.0;
+
+    zenithAmplitude = 0.99 * zenithAmplitude + 0.01 * average;
 }
 
 static void ProcessDecodedBuffer(OMX_BUFFERHEADERTYPE *workingBuffer)
@@ -944,6 +967,7 @@ static void ProcessDecodedBuffer(OMX_BUFFERHEADERTYPE *workingBuffer)
     processTrigger(sum, workingBuffer->nTimeStamp.nHighPart, workingBuffer->nTimeStamp.nLowPart);
     limitEventRate(workingBuffer->nTimeStamp.nLowPart);
     measureFrameRate(workingBuffer->nTimeStamp.nLowPart);
+    measureZenithAmplitude();
 
     if ( logfile )
         fprintf(logfile, "Sum Count Ref: %4d %3d %x\n", sum, count, referenceFrame[100]);
@@ -1313,22 +1337,6 @@ static void uninit_sentinel(void)
     testFrame = 0;
     referenceFrame = 0;
     maskFrame = 0;
-}
-
-static int zenithAmplitude(void)
-{
-    if ( referenceFrame == 0 )
-        return -1;
-
-    int sum = 0;
-
-    for ( int row = 170; row <= 190; row += 10)
-    {
-        for ( int col = 310; col <= 330; col += 10 )
-            sum += referenceFrame[640*row + col];
-    }
-
-    return sum / 9;
 }
 
 static void uninit_decoder(void)
@@ -1807,7 +1815,7 @@ static void runInteractiveLoop()
         }
         else if (!strcmp(token,"get_zenith_amplitude"))
         {
-            printf("=%d\n", zenithAmplitude() );
+            printf("=%5.2f\n", zenithAmplitude );
         }
         else if (!strcmp(token,"force_trigger"))
         {
