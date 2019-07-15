@@ -113,3 +113,11 @@ table {
     color: black;
     text-align: center;
 }
+
+.nodisplay {
+    display: none;
+}
+
+.yesdisplay {
+    display: inline;
+}

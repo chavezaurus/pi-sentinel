@@ -195,7 +195,7 @@ class SentinelServer(object):
         self.relocateCurrent(data)
 
         mp4files = glob.glob("events/s*.mp4")
-        mp4files = list(map(os.path.basename,mp4files))
+        mp4files = sorted(list(map(os.path.basename,mp4files)))
         return mp4files
 
     @cherrypy.expose
@@ -207,7 +207,7 @@ class SentinelServer(object):
         self.relocateCurrent(data)
 
         mp4files = glob.glob("saved/s*.mp4")
-        mp4files = list(map(os.path.basename,mp4files))
+        mp4files = sorted(list(map(os.path.basename,mp4files)))
         return mp4files
 
     @cherrypy.expose
@@ -219,7 +219,7 @@ class SentinelServer(object):
         self.relocateCurrent(data)
 
         mp4files = glob.glob("trash/s*.mp4")
-        mp4files = list(map(os.path.basename,mp4files))
+        mp4files = sorted(list(map(os.path.basename,mp4files)))
         return mp4files
 
     @cherrypy.expose
@@ -241,6 +241,9 @@ class SentinelServer(object):
         response["running"] = r["response"]
         response["startTime"] = {"h": int(self.startTime[0:2]), "m": int(self.startTime[3:5])}
         response["stopTime"]  = {"h": int(self.stopTime[0:2]),  "m": int(self.stopTime[3:5])}
+        response["numEvents"] = len(glob.glob("events/*.mp4"))
+        response["numSaved"]  = len(glob.glob("saved/*.mp4"))
+        response["numTrashed"] = len(glob.glob("trash/*.mp4"))
         return response
 
     @cherrypy.expose
@@ -263,6 +266,25 @@ class SentinelServer(object):
         self.stopTime  = "%02d:%02d" % (stop["h"], stop["m"])
 
         return { "response": "OK" }
+
+    @cherrypy.expose
+    @cherrypy.tools.json_in()
+    @cherrypy.tools.json_out()
+    def file_exists(self):
+        data = cherrypy.request.json
+        path = data["path"]
+        if os.path.exists(path):
+            return { "response": "Yes" }
+        return { "response": "No" }
+
+    @cherrypy.expose
+    @cherrypy.tools.json_in()
+    @cherrypy.tools.json_out()
+    def compose(self):
+        data = cherrypy.request.json
+        path = data["path"]
+        r = self.funnelCmd("compose %s" % data["path"])
+        return r
 
     @cherrypy.expose
     def toggle(self):

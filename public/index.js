@@ -1,17 +1,12 @@
 var root = document.body;
 
-var count = 0; // added a variable
-
 var tableItems = [];
 
 var selectedRow = null;
 var showControls = false;
+var showComposite = false;
 
 var eventTimeString = "";
-
-let Increment = function(e) {
-    count++;
-}
 
 let UpdateEvents = function(fromDir) {
     m.request({
@@ -20,7 +15,6 @@ let UpdateEvents = function(fromDir) {
         body: tableItems
     })
     .then(function(result) {
-        result.sort();
         tableItems = result.map( function(item) {
             return {event: item, from: fromDir, to: fromDir, selected: false};
         });
@@ -42,7 +36,42 @@ var DoTable = {
     }
 }
 
-var videoSource = '';
+var videoSource = null;
+var videoPoster = null;
+
+let CheckForPoster = function( path ) {
+    m.request({
+        method: "POST",
+        url: "file_exists",
+        body: { "path": path }
+    })
+    .then( function(result) {
+        if ( result.response === "Yes") {
+            videoPoster = path;
+        } else {
+            videoPoster = null;
+        }
+    })
+    .catch(function(e) {
+        console.log( e.code );
+    })
+}
+
+let MakeComposite = function( path ) {
+    m.request({
+        method: "POST",
+        url: "compose",
+        body: {"path": path }
+    })
+    .then( function(result) {
+        if ( result.response !== "OK") {
+            alert( "Make composite failed");
+        }
+    })
+    .catch(function(e) {
+        console.log( e.code );
+    })
+}
 
 let ClickTable = function(e) {
     let row = e.target.parentElement.rowIndex-1;
@@ -71,6 +100,15 @@ let ClickTable = function(e) {
         let rowObj = tableItems[row];
         rowObj.selected = true;
         videoSource = rowObj.from+'/'+rowObj.event;
+        posterTest = videoSource.replace(".mp4",".jpg");
+        if ( posterTest === videoPoster ) {
+            showComposite = !showComposite;
+        } else if ( e.altKey ) {
+            MakeComposite( videoSource.replace(".mp4",".h264"));
+        } else {
+            showComposite = false;
+            CheckForPoster( posterTest );
+        }
 
         let dateString = rowObj.event.substring(1,16);
         let year = Number(dateString.substring(0,4));
@@ -94,13 +132,20 @@ let ClickTable = function(e) {
 
 let Video = {
     view: function() {
-        return m('video', {
-            autoplay: true,
-            style: 'sidth: 1920, margin: 0.5rem',
-            controls: true,
-            src: videoSource,
-        })
-    }
+        return m('div', [
+                m('img', {
+                    class: showComposite ? 'yesdisplay' : 'nodisplay',
+                    src: videoPoster,
+                }),
+                m('video', {
+                    class: showComposite ? 'nodisplay' : 'yesdisplay',
+                    autoplay: !showComposite,
+                    style: 'width: 1920, margin: 0.5rem',
+                    controls: true,
+                    src: videoSource
+                })
+            ])
+        }
 }
 
 let Table = {
@@ -144,7 +189,10 @@ var sentinelState = {
     eventsPerHour: 5,
     frameRate: 30.0,
     zenithAmplitude: 0.0,
-    running: "No"
+    running: "No",
+    numEvents: 0,
+    numSaved: 0,
+    numTrashed: 0
 }
 
 let SubmitControls = function() {
@@ -210,6 +258,15 @@ let TimerPickers = {
             }, [
             m("div.citem-left", "Running:"),
             m("div.citem-right", sentinelState.running ),
+
+            m("div.citem-left", "Events:"),
+            m("div.citem-right", sentinelState.numEvents ),
+
+            m("div.citem-left", "Saved:"),
+            m("div.citem-right", sentinelState.numSaved ),
+
+            m("div.citem-left", "Trash:"),
+            m("div.citem-right", sentinelState.numTrashed ),
 
             m("div.citem-left", "Frame Rate:" ),
             m("div.citem-right", sentinelState.frameRate ),

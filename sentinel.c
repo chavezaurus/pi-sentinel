@@ -1,12 +1,3 @@
-/*
- *  V4L2 video capture example
- *
- *  This program can be used and distributed without restrictions.
- *
- *      This program is provided with the V4L2 API
- * see http://linuxtv.org/docs.php for more information
- */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,7 +22,6 @@
 
 #define IMAGE_WIDTH 1920	// JPEG image width
 #define IMAGE_HEIGHT 1080	// JPEG image height
-#define IMAGE_CHANNELS 3	// JPEG image channels (RGB=3channels)
 
 #define CLEAR(x) memset(&(x), 0, sizeof(x))
 #define FRAMES_TO_KEEP 300
@@ -67,7 +57,7 @@ static OMX_BUFFERHEADERTYPE *encoderBuffer;
 static OMX_BUFFERHEADERTYPE *imageBuffer;
 
 static char *composeBuffer;
-static short *averageBuffer;
+static int  *averageBuffer;
 static char *dev_name;
 static char *h264_name;
 static int fd = -1;
@@ -1177,11 +1167,7 @@ static void init_decoder(void)
 
     error = OMX_Init();
     if (error != OMX_ErrorNone)
-    {
-        fprintf(stderr, "Cannot init: %d, %s\n",
-                errno, strerror(errno));
-        exit(EXIT_FAILURE);
-    }
+        omx_die( error, "Could not init");
 
     decoderCallbacks.EventHandler = EventHandler;
     decoderCallbacks.FillBufferDone = FillBufferDone;
@@ -1193,11 +1179,7 @@ static void init_decoder(void)
                           &decoderCallbacks);
 
     if (error != OMX_ErrorNone)
-    {
-        fprintf(stderr, "Cannot get decoder handle: %d, %s\n",
-                errno, strerror(errno));
-        exit(EXIT_FAILURE);
-    }
+        omx_die( error, "Could not get decoder handle");
 
     memset(&format, 0, sizeof(OMX_VIDEO_PARAM_PORTFORMATTYPE));
     format.nSize = sizeof(OMX_VIDEO_PARAM_PORTFORMATTYPE);
@@ -1207,43 +1189,27 @@ static void init_decoder(void)
 
     error = OMX_SetParameter(decoderHandle, OMX_IndexParamVideoPortFormat, &format);
     if (error != OMX_ErrorNone)
-    {
-        fprintf(stderr, "Cannot set parameter: %d, %s\n",
-                errno, strerror(errno));
-        exit(EXIT_FAILURE);
-    }
+        omx_die( error, "Could not set parameter");
 
     paramPort.nSize = sizeof(OMX_PARAM_PORTDEFINITIONTYPE);
     paramPort.nVersion.nVersion = OMX_VERSION;
     paramPort.nPortIndex = 130;
     error = OMX_GetParameter(decoderHandle, OMX_IndexParamPortDefinition, &paramPort);
     if (error != OMX_ErrorNone)
-    {
-        fprintf(stderr, "Cannot get parameter: %d, %s\n",
-                errno, strerror(errno));
-        exit(EXIT_FAILURE);
-    }
+        omx_die( error, "Could not get parameter");
 
     paramPort.nBufferCountActual = paramPort.nBufferCountMin;
     paramPort.nBufferSize = 4147200;
     error = OMX_SetParameter(decoderHandle, OMX_IndexParamPortDefinition, &paramPort);
     if (error != OMX_ErrorNone)
-    {
-        fprintf(stderr, "Cannot set parameter: %d, %s\n",
-                errno, strerror(errno));
-        exit(EXIT_FAILURE);
-    }
+        omx_die( error, "Could not set parameter");
 
     inputBufferSize = paramPort.nBufferSize;
 
     paramPort.nPortIndex = 131;
     error = OMX_GetParameter(decoderHandle, OMX_IndexParamPortDefinition, &paramPort);
     if (error != OMX_ErrorNone)
-    {
-        fprintf(stderr, "Cannot get parameter: %d, %s\n",
-                errno, strerror(errno));
-        exit(EXIT_FAILURE);
-    }
+        omx_die( error, "Could not get parameter");
 
     paramPort.nBufferCountActual = 2;
     paramPort.format.video.nFrameWidth = 1920;
@@ -1255,50 +1221,30 @@ static void init_decoder(void)
 
     error = OMX_SetParameter(decoderHandle, OMX_IndexParamPortDefinition, &paramPort);
     if (error != OMX_ErrorNone)
-    {
-        fprintf(stderr, "Cannot set parameter: %d, %s\n",
-                errno, strerror(errno));
-        exit(EXIT_FAILURE);
-    }
+        omx_die( error, "Could not set parameter");
 
     // It appears that ports are already enabled so these are not needed
     // error = error || OMX_SendCommand ( decoderHandle, OMX_CommandPortEnable, 130, NULL);
     // error = error || OMX_SendCommand ( decoderHandle, OMX_CommandPortEnable, 131, NULL);
     error = error || OMX_SendCommand(decoderHandle, OMX_CommandStateSet, OMX_StateIdle, NULL);
     if (error != OMX_ErrorNone)
-    {
-        fprintf(stderr, "Cannot send command: %d, %s\n",
-                errno, strerror(errno));
-        exit(EXIT_FAILURE);
-    }
+        omx_die( error, "Could not send command");
 
     error = error || OMX_AllocateBuffer(decoderHandle, &decoderBuffer, 130, NULL, inputBufferSize);
     error = error || OMX_AllocateBuffer(decoderHandle, &pingBuffer, 131, NULL, paramPort.nBufferSize);
     error = error || OMX_AllocateBuffer(decoderHandle, &pongBuffer, 131, NULL, paramPort.nBufferSize);
     if (error != OMX_ErrorNone)
-    {
-        fprintf(stderr, "Cannot allocate buffers: %d, %s\n",
-                errno, strerror(errno));
-        exit(EXIT_FAILURE);
-    }
+        omx_die( error, "Could not allocate buffers");
 
     outputBuffer = 0;
 
     error = error || OMX_SendCommand(decoderHandle, OMX_CommandStateSet, OMX_StateExecuting, NULL);
     if (error != OMX_ErrorNone)
-    {
-        fprintf(stderr, "Cannot send commands: %d, %s\n",
-                errno, strerror(errno));
-        exit(EXIT_FAILURE);
-    }
+        omx_die( error, "Could not send commands");
 
     error = OMX_FillThisBuffer(decoderHandle, pingBuffer);
     if (error != OMX_ErrorNone)
-    {
-        fprintf(stderr, "Cannot fill this buffer: %d, %s\n",
-                errno, strerror(errno));
-        exit(EXIT_FAILURE);
-    }
+        omx_die( error, "Could not Fill This Buffer");
 }
 
 static void init_encoder(void)
@@ -1388,8 +1334,8 @@ static void init_encoder(void)
         omx_die( error, "Cannot set encoder parameter");
 
     // It appears that ports are already enabled so these are not needed
-    error = error || OMX_SendCommand ( encoderHandle, OMX_CommandPortEnable, 340, NULL);
-    error = error || OMX_SendCommand ( encoderHandle, OMX_CommandPortEnable, 341, NULL);
+    // error = error || OMX_SendCommand ( encoderHandle, OMX_CommandPortEnable, 340, NULL);
+    // error = error || OMX_SendCommand ( encoderHandle, OMX_CommandPortEnable, 341, NULL);
     error = error || OMX_SendCommand( encoderHandle, OMX_CommandStateSet, OMX_StateIdle, NULL);
     if (error != OMX_ErrorNone)
         omx_die( error, "Cannot send command");
@@ -1536,38 +1482,22 @@ static void uninit_decoder(void)
     error = error || OMX_SendCommand(decoderHandle, OMX_CommandPortDisable, 130, NULL);
     error = error || OMX_SendCommand(decoderHandle, OMX_CommandPortDisable, 131, NULL);
     if (error != OMX_ErrorNone)
-    {
-        fprintf(stderr, "Cannot send commands: %d, %s\n",
-                errno, strerror(errno));
-        exit(EXIT_FAILURE);
-    }
+        omx_die( error, "Could not send commands");
 
     error = error || OMX_FreeBuffer(decoderHandle, 130, decoderBuffer);
     error = error || OMX_FreeBuffer(decoderHandle, 131, pingBuffer);
     error = error || OMX_FreeBuffer(decoderHandle, 131, pongBuffer);
     if (error != OMX_ErrorNone)
-    {
-        fprintf(stderr, "Cannot free buffers: %d, %s\n",
-                errno, strerror(errno));
-        exit(EXIT_FAILURE);
-    }
+        omx_die( error, "Could not free buffers");
 
     error = OMX_FreeHandle(decoderHandle);
 
     if (error != OMX_ErrorNone)
-    {
-        fprintf(stderr, "Cannot free handle: %d, %s\n",
-                errno, strerror(errno));
-        exit(EXIT_FAILURE);
-    }
+        omx_die( error, "Could not free handle");
 
     error = OMX_Deinit();
     if (error != OMX_ErrorNone)
-    {
-        fprintf(stderr, "Cannot uninit decoder: %d, %s\n",
-                errno, strerror(errno));
-        exit(EXIT_FAILURE);
-    }
+        omx_die( error, "Could not Deinit");
 }
 
 static void readMask(void)
@@ -1645,11 +1575,7 @@ static void ProcessComposeBuffer(void)
                                (workingBuffer == pingBuffer) ? pongBuffer : pingBuffer);
 
     if (error != OMX_ErrorNone)
-    {
-        fprintf(stderr, "FillThisBuffer failed: %d, %s\n",
-                errno, strerror(errno));
-        exit(EXIT_FAILURE);
-    }
+        omx_die( error, "Could not Fill This Buffer");
 
     for (int iy = 0; iy < 1080; ++iy)
     {
@@ -1683,11 +1609,7 @@ static int ProcessAverageBuffer(void)
                                (workingBuffer == pingBuffer) ? pongBuffer : pingBuffer);
 
     if (error != OMX_ErrorNone)
-    {
-        fprintf(stderr, "FillThisBuffer failed: %d, %s\n",
-                errno, strerror(errno));
-        exit(EXIT_FAILURE);
-    }
+        omx_die( error, "Could not Fill This Buffer");
 
     for (int iy = 0; iy < 1080; ++iy)
     {
@@ -1854,9 +1776,9 @@ static void averagerLoop2( const char* path )
         return;
 
     outputBuffer = 0;
-    averageBuffer = (short *)malloc(sizeof(short) * 1920 * 1088 * 3 / 2);
+    averageBuffer = (int *)malloc(sizeof(int) * 1920 * 1088 * 3 / 2);
 
-    memset(averageBuffer, 0, sizeof(short) * 1920 * 1088 * 3 / 2);
+    memset(averageBuffer, 0, sizeof(int) * 1920 * 1088 * 3 / 2);
     memset(composeBuffer+1920*1088, 128, 1920 * 1088 / 2);
 
     int count = fread(buffer, 1, 4096, file);
@@ -1868,12 +1790,13 @@ static void averagerLoop2( const char* path )
 
     while (count > 0)
     {
+        frameCount += ProcessAverageBuffer();
+
+        memcpy(decoderBuffer->pBuffer, buffer, count);
+        decoderBuffer->nFilledLen = count;
         decodeBufferFull = 1;
 
-        decoderBuffer->nFilledLen = count;
-        memcpy(decoderBuffer->pBuffer, buffer, count);
         error = OMX_EmptyThisBuffer(decoderHandle, decoderBuffer);
-
         if (error != OMX_ErrorNone)
         {
             fprintf(stderr, "Cannot EmptyThisBuffer: %d, %s\n",
@@ -1888,29 +1811,35 @@ static void averagerLoop2( const char* path )
             exit(EXIT_FAILURE);
         }
 
-        frameCount += ProcessAverageBuffer();
-        while (decodeBufferFull)
-        {
-            usleep(5000);
-            frameCount += ProcessAverageBuffer();
-        }
+        pthread_mutex_lock(&composeBufferThreadMutex);
+        while (decodeBufferFull != 0)
+            pthread_cond_wait(&composeBufferThreadCondition, &composeBufferThreadMutex);
+
+        pthread_mutex_unlock(&composeBufferThreadMutex);
 
         count = fread(buffer, 1, 4096, file);
     }
 
     fclose(file);
 
+    usleep(10000);
+    ProcessAverageBuffer();
+
     for (int i = 0; frameCount != 0 && i < 1920 * 1080; ++i)
     {
-        int scaled = 10 * averageBuffer[i] / frameCount;
+        int scaled = averageBuffer[i];
+        scaled *= 10;
+        scaled /= frameCount;
         composeBuffer[i] = (scaled > 255) ? 255 : scaled;
     }
 
     free(averageBuffer);
 }
 
-static void EncodeLoop(void)
+static void EncodeLoop(const char* path)
 {
+    char jpgPath[255];
+
     OMX_ERRORTYPE error = OMX_ErrorNone;
     outputBuffer = 0;
 
@@ -1930,7 +1859,18 @@ static void EncodeLoop(void)
         usleep(10000);
     }
 
-    FILE* file = fopen("testImage.jpg", "wb");
+    strncpy(jpgPath, path, 254);
+
+    char *pDot = strrchr(jpgPath, '.');
+    if (pDot)
+        strcpy(pDot, ".jpg");
+    else
+        strcat(jpgPath, ".jpg");
+
+    FILE* file = fopen(jpgPath, "wb");
+    if ( file == 0 )
+        return;
+
     fwrite(outputBuffer->pBuffer, outputBuffer->nFilledLen, 1, file);
     fclose(file);
 
@@ -1947,10 +1887,10 @@ static void averagerLoop(void)
         return;
 
     outputBuffer = 0;
-    averageBuffer = (short *)malloc(sizeof(short) * 1920 * 1088 * 3 / 2);
+    averageBuffer = (int *)malloc(sizeof(int) * 1920 * 1088 * 3 / 2);
     composeBuffer = (char *)malloc(1920 * 1088 * 3 / 2);
 
-    memset(averageBuffer, 0, sizeof(short) * 1920 * 1088 * 3 / 2);
+    memset(averageBuffer, 0, sizeof(int) * 1920 * 1088 * 3 / 2);
     memset(composeBuffer, 128, 1920 * 1088 * 3 / 2);
 
     int count = fread(buffer, 1, 4096, file);
@@ -2042,7 +1982,7 @@ static void* composeThread(void *args)
     uninit_decoder();
 
     init_encoder();
-    EncodeLoop();
+    EncodeLoop( (unsigned char*)args );
     uninit_encoder();
 
     free(composeBuffer);
@@ -2058,7 +1998,7 @@ static void* averageThread(void *args)
     uninit_decoder();
 
     init_encoder();
-    EncodeLoop();
+    EncodeLoop( (unsigned char*)args );
     uninit_encoder();
 
     free(composeBuffer);
