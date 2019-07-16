@@ -27,10 +27,21 @@ table {
     color: #fff;
     max-height: 100%;
     overflow-y: auto;
-    overflow-x: visible;
+    overflow-x: hidden;
     justify-self: center;
 }
 
+.stable th {
+    text-align: left;
+    position: sticky;
+    background: white;
+    top: 0;
+}
+  
+.stable td {
+    padding-right: 1em; /* Prevent Firefox overlap scrollbar */
+}
+  
 .content {
     background: black;
     grid-area: xcontent;
@@ -64,7 +75,7 @@ table {
 }
 
 .rselect {
-    background: rgb(110,110,110);
+    background: rgb(91,109,123);
 }
   
 .hello {
@@ -120,4 +131,9 @@ table {
 
 .yesdisplay {
     display: inline;
+}
+
+.responsive {
+    max-width: 100%;
+    height: auto;
 }

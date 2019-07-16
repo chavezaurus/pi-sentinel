@@ -185,6 +185,8 @@ class SentinelServer(object):
                 os.rename( fromPath+".mp4",  toPath+".mp4" )
                 os.rename( fromPath+".h264", toPath+".h264")
                 os.rename( fromPath+".txt",  toPath+".txt")
+                if os.path.exists( fromPath+".jpg"):
+                    os.rename( fromPath+".jpg", toPath+".jpg" )
 
     @cherrypy.expose
     @cherrypy.tools.json_in()

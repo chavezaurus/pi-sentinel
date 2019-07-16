@@ -133,14 +133,14 @@ let ClickTable = function(e) {
 let Video = {
     view: function() {
         return m('div', [
-                m('img', {
+                m('img.responsive', {
                     class: showComposite ? 'yesdisplay' : 'nodisplay',
                     src: videoPoster,
                 }),
-                m('video', {
+                m('video.responsive', {
                     class: showComposite ? 'nodisplay' : 'yesdisplay',
                     autoplay: !showComposite,
-                    style: 'width: 1920, margin: 0.5rem',
+                    // style: 'width: 1920, margin: 0.5rem',
                     controls: true,
                     src: videoSource
                 })
@@ -175,7 +175,10 @@ let DoHeader = {
         return m("div.header", [
             m("h1", "Pi Sentinel"),
             m("button.pure-button", 
-                {onclick: function(){showControls=!showControls}}, 
+                {onclick: function(){
+                    showControls=!showControls;
+                    RequestControls();
+                }}, 
                 showControls ? "Show Event Tables" : "Show Controls Form")
         ]);
     }

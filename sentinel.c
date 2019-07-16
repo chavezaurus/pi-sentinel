@@ -1974,6 +1974,8 @@ static void *runThread(void *args)
 
 static void* composeThread(void *args)
 {
+    running = 1;
+
     composeBuffer = (char *)malloc(1920 * 1088 * 3 / 2);
     memset(composeBuffer, 0, 1920 * 1088 * 3 / 2);
 
@@ -1986,10 +1988,14 @@ static void* composeThread(void *args)
     uninit_encoder();
 
     free(composeBuffer);
+
+    running = 0;
 }
 
 static void* averageThread(void *args)
 {
+    running = 1;
+
     composeBuffer = (char *)malloc(1920 * 1088 * 3 / 2);
     memset(composeBuffer, 0, 1920 * 1088 * 3 / 2);
 
@@ -2002,6 +2008,8 @@ static void* averageThread(void *args)
     uninit_encoder();
 
     free(composeBuffer);
+
+    running = 0;
 }
 
 static void runInteractiveLoop()
@@ -2077,6 +2085,12 @@ static void runInteractiveLoop()
         }
         else if (!strcmp(token,"compose"))
         {
+            if ( running )
+            {
+                printf( "=No\n" );
+                continue;
+            }
+
             token = strtok(NULL," \n\t\r");
 
             int rc = pthread_create(&composeThread_id, NULL, &composeThread, token );
@@ -2084,6 +2098,12 @@ static void runInteractiveLoop()
         }
         else if (!strcmp(token,"average"))
         {
+            if ( running )
+            {
+                printf( "=No\n" );
+                continue;
+            }
+
             token = strtok(NULL," \n\t\r");
 
             int rc = pthread_create(&averageThread_id, NULL, &averageThread, token );
