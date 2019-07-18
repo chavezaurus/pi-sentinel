@@ -868,6 +868,10 @@ static void limitEventRate(unsigned microseconds)
     }
 }
 
+//
+// Measure the filtered frame rate
+// If the frame rate drops we may want to switch to manual exposure mode.
+//
 static void measureFrameRate(unsigned microseconds)
 {
     static unsigned int lastMicrosecond = 0;
@@ -886,6 +890,10 @@ static void measureFrameRate(unsigned microseconds)
     lastMicrosecond = microseconds;
 }
 
+//
+// Measure the filtered average amplitude of an arbitrary collection of pixels near the zenith.
+// This is used to determine if we are looking at a daylight sky where auto-exposure may be the preferred mode.
+//
 static void measureZenithAmplitude()
 {
     if ( testFrame == 0 )
@@ -904,6 +912,10 @@ static void measureZenithAmplitude()
     zenithAmplitude = 0.99 * zenithAmplitude + 0.01 * average;
 }
 
+//
+// This processes each frame looking for changes in brightness
+// To save on processing time, not every pixel is examined, just the center pixel of every 3x3 pixel grid.
+//
 static void ProcessDecodedBuffer(OMX_BUFFERHEADERTYPE *workingBuffer)
 {
     static int countn = 0;
@@ -1157,6 +1169,9 @@ static void omx_die(OMX_ERRORTYPE error, const char* message)
 	exit(EXIT_FAILURE);
 }
 
+//
+// Initialize the decoder used to decode .h264 frames into YUV420P frames
+//
 static void init_decoder(void)
 {
     OMX_ERRORTYPE error;
@@ -1247,6 +1262,9 @@ static void init_decoder(void)
         omx_die( error, "Could not Fill This Buffer");
 }
 
+//
+// Initialize the encoder used to convert from YUV420P format to JPEG
+//
 static void init_encoder(void)
 {
     OMX_ERRORTYPE error;
@@ -1314,6 +1332,7 @@ static void init_encoder(void)
     if (error != OMX_ErrorNone)
         omx_die( error, "Failed to set port definition for encoder output port 341");
 
+    // Set the JPEG quality factor
     OMX_IMAGE_PARAM_QFACTORTYPE qFactor;
     OMX_INIT_STRUCTURE(qFactor);
     qFactor.nPortIndex = encoder_portdef.nPortIndex;
@@ -1561,6 +1580,10 @@ static void readMask(void)
     }
 }
 
+//
+// The compose buffer builds the composite of all the working buffers
+// Each pixel of the compose buffer is the maximum of the corresponding pixel in all the working buffers.
+//
 static void ProcessComposeBuffer(void)
 {
     if (outputBuffer == 0)
