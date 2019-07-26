@@ -55,6 +55,7 @@ static OMX_BUFFERHEADERTYPE *pongBuffer;
 static OMX_BUFFERHEADERTYPE *outputBuffer;
 static OMX_BUFFERHEADERTYPE *encoderBuffer;
 static OMX_BUFFERHEADERTYPE *imageBuffer;
+static OMX_BUFFERHEADERTYPE *jpegBuffers[3];
 
 static char *composeBuffer;
 static int  *averageBuffer;
@@ -65,13 +66,14 @@ struct buffer *buffers;
 static unsigned int n_buffers;
 static int out_buf;
 static int decodeBufferFull;
+static int portSettingsChanged = 0;
 static int frame_count = 300;
 static int frame_number = 0;
 static int force_count = -1;
 static int noise_level = 40;
-static unsigned char *testFrame;
-static unsigned char *referenceFrame;
-static unsigned char *maskFrame;
+static unsigned char *testFrame = 0;
+static unsigned char *referenceFrame = 0;
+static unsigned char *maskFrame = 0;
 
 static unsigned char *frameBuffers[FRAMES_TO_KEEP];
 static int frameSizes[FRAMES_TO_KEEP];
@@ -120,6 +122,7 @@ static pthread_mutex_t composeBufferThreadMutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t composeBufferThreadCondition = PTHREAD_COND_INITIALIZER;
 static pthread_t composeThread_id;
 static pthread_t averageThread_id;
+static pthread_t maskThread_id;
 
 static pthread_t runThread_id;
 
@@ -537,8 +540,17 @@ EventHandler(OMX_OUT OMX_HANDLETYPE hComponent,
              OMX_OUT OMX_U32 Data2,
              OMX_OUT OMX_PTR pEventData)
 {
-    printf("EventHandler %d %x\n", eEvent, Data1);
-    fflush(stdout);
+    if ( eEvent == OMX_EventPortSettingsChanged )
+    {
+        printf("Port Settings Changed\n");
+        fflush(stdout);
+        portSettingsChanged = 1;
+    } 
+    else 
+    {
+        printf("EventHandler %d %x\n", eEvent, Data1);
+        fflush(stdout);
+    }
     return OMX_ErrorNone;
 }
 
@@ -601,12 +613,20 @@ static int decode_frame(void)
 
     assert(buf.index < n_buffers);
 
+    if ( decodeBufferFull == 1 )
+    {
+        fprintf(stderr, "Input buffer not ready\n");
+        usleep(10000);
+    }
+
     memcpy(decoderBuffer->pBuffer, buffers[buf.index].start, buf.bytesused);
     decoderBuffer->nFilledLen = buf.bytesused;
     decoderBuffer->nOffset = 0;
     decoderBuffer->nInputPortIndex = 130;
     decoderBuffer->nTimeStamp.nLowPart = timeStamp_lo;
     decoderBuffer->nTimeStamp.nHighPart = timeStamp_hi;
+
+    decodeBufferFull = 1;
 
     // fprintf( logfile, "->--- %u\n", timeStamp_lo );
     error = OMX_EmptyThisBuffer(decoderHandle, decoderBuffer);
@@ -662,7 +682,7 @@ static void saveEventJob(void)
     time_t unixTime = timelong;
 
     ptm = gmtime(&unixTime);
-    sprintf(nameVideoFile, "events/s%04d%02d%02d_%02d%02d%02d.h264",
+    sprintf(nameVideoFile, "new/s%04d%02d%02d_%02d%02d%02d.h264",
             ptm->tm_year + 1900, ptm->tm_mon + 1, ptm->tm_mday,
             ptm->tm_hour, ptm->tm_min, ptm->tm_sec);
 
@@ -670,7 +690,7 @@ static void saveEventJob(void)
     if (videoFile == 0)
         return;
 
-    sprintf(nameTextFile, "events/s%04d%02d%02d_%02d%02d%02d.txt",
+    sprintf(nameTextFile, "new/s%04d%02d%02d_%02d%02d%02d.txt",
             ptm->tm_year + 1900, ptm->tm_mon + 1, ptm->tm_mday,
             ptm->tm_hour, ptm->tm_min, ptm->tm_sec);
 
@@ -1112,6 +1132,7 @@ static void decodeLoop(void)
     if (frame_count == 0)
         loopIsInfinite = 1; //infinite loop
     count = frame_count;
+    decodeBufferFull = 0;
 
     while (running && (count-- > 0 || loopIsInfinite))
     {
@@ -1256,6 +1277,130 @@ static void init_decoder(void)
     error = error || OMX_SendCommand(decoderHandle, OMX_CommandStateSet, OMX_StateExecuting, NULL);
     if (error != OMX_ErrorNone)
         omx_die( error, "Could not send commands");
+
+    error = OMX_FillThisBuffer(decoderHandle, pingBuffer);
+    if (error != OMX_ErrorNone)
+        omx_die( error, "Could not Fill This Buffer");
+}
+
+static void init_jpeg_decoder(void)
+{
+    OMX_ERRORTYPE error;
+    OMX_PARAM_PORTDEFINITIONTYPE paramPort;
+    OMX_IMAGE_PARAM_PORTFORMATTYPE format;
+
+    int inputBufferSize;
+
+    error = OMX_Init();
+    if (error != OMX_ErrorNone)
+        omx_die( error, "Could not init");
+
+    decoderCallbacks.EventHandler = EventHandler;
+    decoderCallbacks.FillBufferDone = FillBufferDone;
+    decoderCallbacks.EmptyBufferDone = EmptyBufferDone;
+
+    error = OMX_GetHandle(&decoderHandle,
+                          "OMX.broadcom.image_decode",
+                          NULL,
+                          &decoderCallbacks);
+
+    if (error != OMX_ErrorNone)
+        omx_die( error, "Could not get decoder handle");
+
+    OMX_PORT_PARAM_TYPE port;
+    memset(&port, 0, sizeof(OMX_PORT_PARAM_TYPE));
+    port.nSize = sizeof(OMX_PORT_PARAM_TYPE);
+    port.nVersion.nVersion = OMX_VERSION;
+    error = OMX_GetParameter(decoderHandle, OMX_IndexParamImageInit, &port);
+    if ( error != OMX_ErrorNone )
+        omx_die( error, "Could not get port parameters");
+
+    int inPort = port.nStartPortNumber;
+    int outPort = port.nStartPortNumber + 1;
+
+    error = OMX_SendCommand ( decoderHandle, OMX_CommandPortDisable, inPort, NULL);
+    if ( error != OMX_ErrorNone )
+        omx_die( error, "Could not disable port");
+
+    error = OMX_SendCommand ( decoderHandle, OMX_CommandPortDisable, outPort, NULL);
+    if ( error != OMX_ErrorNone )
+        omx_die( error, "Could not disable port");
+
+    error = OMX_SendCommand(decoderHandle, OMX_CommandStateSet, OMX_StateIdle, NULL);
+    if (error != OMX_ErrorNone)
+        omx_die( error, "Could not send commands");
+
+    memset(&format, 0, sizeof(OMX_IMAGE_PARAM_PORTFORMATTYPE));
+    format.nSize = sizeof(OMX_IMAGE_PARAM_PORTFORMATTYPE);
+    format.nVersion.nVersion = OMX_VERSION;
+    format.nPortIndex = inPort;
+    format.eCompressionFormat = OMX_IMAGE_CodingJPEG;
+
+    error = OMX_SetParameter(decoderHandle, OMX_IndexParamImagePortFormat, &format);
+    if (error != OMX_ErrorNone)
+        omx_die( error, "Could not set parameter");
+
+    memset(&paramPort, 0, sizeof(OMX_PARAM_PORTDEFINITIONTYPE));
+    paramPort.nSize = sizeof(OMX_PARAM_PORTDEFINITIONTYPE);
+    paramPort.nVersion.nVersion = OMX_VERSION;
+    paramPort.nPortIndex = inPort;
+    error = OMX_GetParameter(decoderHandle, OMX_IndexParamPortDefinition, &paramPort);
+    if (error != OMX_ErrorNone)
+        omx_die( error, "Could not get parameter");
+
+    int bufferCount = paramPort.nBufferCountActual;
+    int bufferSize = paramPort.nBufferSize;
+
+    error = OMX_SendCommand ( decoderHandle, OMX_CommandPortEnable, inPort, NULL);
+    if ( error != OMX_ErrorNone )
+        omx_die( error, "Could not enable port");
+
+    for ( int i = 0; i < 3; ++i )
+    {
+        error = OMX_AllocateBuffer(decoderHandle, &jpegBuffers[i], inPort, NULL, bufferSize);
+        if (error != OMX_ErrorNone)
+            omx_die( error, "Could not allocate buffers");
+    }
+
+    paramPort.nPortIndex = outPort;
+    error = OMX_GetParameter(decoderHandle, OMX_IndexParamPortDefinition, &paramPort);
+    if (error != OMX_ErrorNone)
+        omx_die( error, "Could not get parameter");
+
+    paramPort.format.image.eCompressionFormat = OMX_IMAGE_CodingAutoDetect;
+
+    error = OMX_SetParameter(decoderHandle, OMX_IndexParamPortDefinition, &paramPort);
+    if (error != OMX_ErrorNone)
+        omx_die( error, "Could not set parameter");
+
+    outputBuffer = 0;
+
+    error = OMX_SendCommand(decoderHandle, OMX_CommandStateSet, OMX_StateExecuting, NULL);
+    if (error != OMX_ErrorNone)
+        omx_die( error, "Could not send commands");
+}
+
+static void init_jpeg_output( OMX_HANDLETYPE decoderHandle, int outPort )
+{
+    OMX_ERRORTYPE error;
+    OMX_PARAM_PORTDEFINITIONTYPE paramPort;
+
+    error = OMX_SendCommand ( decoderHandle, OMX_CommandPortEnable, outPort, NULL);
+    if ( error != OMX_ErrorNone )
+        omx_die( error, "Could not enable port");
+
+    memset(&paramPort, 0, sizeof(OMX_PARAM_PORTDEFINITIONTYPE));
+    paramPort.nSize = sizeof(OMX_PARAM_PORTDEFINITIONTYPE);
+    paramPort.nVersion.nVersion = OMX_VERSION;
+    paramPort.nPortIndex = outPort;
+
+    error = OMX_GetParameter(decoderHandle, OMX_IndexParamPortDefinition, &paramPort);
+    if (error != OMX_ErrorNone)
+        omx_die( error, "Could not get parameter");
+
+    error = OMX_AllocateBuffer( decoderHandle, &pingBuffer, outPort, NULL, paramPort.nBufferSize);
+    if (error != OMX_ErrorNone)
+        omx_die( error, "Could not allocate ping buffer");
 
     error = OMX_FillThisBuffer(decoderHandle, pingBuffer);
     if (error != OMX_ErrorNone)
@@ -1414,16 +1559,22 @@ static void init_sentinel(void)
 {
     int frame_size = 1920 * 1080 / 9;
 
-    testFrame = (unsigned char *)malloc(frame_size);
-    referenceFrame = (unsigned char *)malloc(frame_size);
-    maskFrame = (unsigned char *)malloc(frame_size);
-
-    for (int i = 0; i < frame_size; ++i)
+    if ( testFrame == 0 )
     {
-        testFrame[i] = 0;
-        referenceFrame[i] = 255;
-        maskFrame[i] = 40;
+        testFrame = (unsigned char *)malloc(frame_size);
+        memset( testFrame, 0, frame_size );
     }
+
+    if ( referenceFrame == 0 )
+    {
+        referenceFrame = (unsigned char *)malloc(frame_size);
+        memset( referenceFrame, 255, frame_size );
+    }
+
+    if ( maskFrame == 0 )
+        maskFrame = (unsigned char *)malloc(frame_size);
+
+    memset( maskFrame, noise_level, frame_size );
 
     for (int i = 0; i < FRAMES_TO_KEEP; ++i)
     {
@@ -1497,20 +1648,74 @@ static void uninit_decoder(void)
     // printf( "uninit_decoder\n" );
     OMX_ERRORTYPE error = OMX_ErrorNone;
 
-    error = error || OMX_SendCommand(decoderHandle, OMX_CommandStateSet, OMX_StateIdle, NULL);
-    error = error || OMX_SendCommand(decoderHandle, OMX_CommandPortDisable, 130, NULL);
-    error = error || OMX_SendCommand(decoderHandle, OMX_CommandPortDisable, 131, NULL);
+    error = OMX_SendCommand(decoderHandle, OMX_CommandStateSet, OMX_StateIdle, NULL);
     if (error != OMX_ErrorNone)
-        omx_die( error, "Could not send commands");
+        omx_die( error, "Could not set state to idle");
 
-    error = error || OMX_FreeBuffer(decoderHandle, 130, decoderBuffer);
-    error = error || OMX_FreeBuffer(decoderHandle, 131, pingBuffer);
-    error = error || OMX_FreeBuffer(decoderHandle, 131, pongBuffer);
+    error = OMX_SendCommand(decoderHandle, OMX_CommandPortDisable, 130, NULL);
     if (error != OMX_ErrorNone)
-        omx_die( error, "Could not free buffers");
+        omx_die( error, "Could not disable port 130");
+
+    error = OMX_SendCommand(decoderHandle, OMX_CommandPortDisable, 131, NULL);
+    if (error != OMX_ErrorNone)
+        omx_die( error, "Could not disable port 131");
+
+    error = OMX_FreeBuffer(decoderHandle, 130, decoderBuffer);
+    if (error != OMX_ErrorNone)
+        omx_die( error, "Could not free decoder buffer");
+    decoderBuffer = 0;
+
+    error = OMX_FreeBuffer(decoderHandle, 131, pingBuffer);
+    if (error != OMX_ErrorNone)
+        omx_die( error, "Could not free ping buffer");
+    pingBuffer = 0;
+
+    error = OMX_FreeBuffer(decoderHandle, 131, pongBuffer);
+    if (error != OMX_ErrorNone)
+        omx_die( error, "Could not free pong buffer");
+    pongBuffer = 0;
 
     error = OMX_FreeHandle(decoderHandle);
+    if (error != OMX_ErrorNone)
+        omx_die( error, "Could not free handle");
 
+    error = OMX_Deinit();
+    if (error != OMX_ErrorNone)
+        omx_die( error, "Could not Deinit");
+}
+
+static void uninit_jpeg_decoder(void)
+{
+    OMX_ERRORTYPE error = OMX_ErrorNone;
+
+    error = OMX_SendCommand(decoderHandle, OMX_CommandStateSet, OMX_StateIdle, NULL);
+    if (error != OMX_ErrorNone)
+        omx_die( error, "Could not set state to idle");
+
+    error = OMX_SendCommand(decoderHandle, OMX_CommandPortDisable, 320, NULL);
+    if (error != OMX_ErrorNone)
+        omx_die( error, "Could not disable port 320");
+
+    error = OMX_SendCommand(decoderHandle, OMX_CommandPortDisable, 321, NULL);
+    if (error != OMX_ErrorNone)
+        omx_die( error, "Could not disable port 321");
+
+    for ( int i = 0; i < 3; ++i )
+    {
+        error = OMX_FreeBuffer(decoderHandle, 320, jpegBuffers[i]);
+        if (error != OMX_ErrorNone)
+            omx_die( error, "Could not free JPEG buffers");
+    }
+
+    if ( pingBuffer != 0 )
+    {
+        error = OMX_FreeBuffer(decoderHandle, 321, pingBuffer);
+        if (error != OMX_ErrorNone)
+            omx_die( error, "Could not free ping buffer");
+        pingBuffer = 0;
+    }
+
+    error = OMX_FreeHandle(decoderHandle);
     if (error != OMX_ErrorNone)
         omx_die( error, "Could not free handle");
 
@@ -1523,11 +1728,17 @@ static void readMask(void)
 {
     char buffer[100];
 
+    int frame_size = 1920 * 1080 / 9;
+
+    if ( maskFrame == 0 )
+        maskFrame = (unsigned char *)malloc(frame_size);
+
+    memset( maskFrame, noise_level, frame_size );
+
     FILE *file = fopen("mask.ppm", "rb");
     if (file == 0)
     {
         printf("No mask file found. Noise level set to: %d\n", noise_level);
-        memset(maskFrame, noise_level, 640 * 360);
         return;
     }
 
@@ -1580,10 +1791,51 @@ static void readMask(void)
     }
 }
 
-//
-// The compose buffer builds the composite of all the working buffers
-// Each pixel of the compose buffer is the maximum of the corresponding pixel in all the working buffers.
-//
+static void ProcessJpegMask(void)
+{
+    int frame_size = 1920 * 1080 / 9;
+
+    if ( maskFrame == 0 )
+        maskFrame = (unsigned char *)malloc(frame_size);
+
+    memset( maskFrame, noise_level, frame_size );
+
+    if (outputBuffer == 0)
+    {
+        fprintf( stderr, "JPEG Mask image conversion failed");
+        return;
+    }
+
+    OMX_BUFFERHEADERTYPE *workingBuffer = outputBuffer;
+    outputBuffer = 0;
+    
+    unsigned char *pMask = maskFrame;
+
+    for (int iy = 1; iy < 1080; iy+=3)
+    {
+        for (int ix = 1; ix < 1920; ix+=3)
+        {
+            int indexY = 1920 * iy + ix;
+            int indexU = 1920 * 1088 + 960 * (iy / 2) + (ix / 2);
+            int indexV = indexU + 1920 * 1088 / 4;
+
+            int y = workingBuffer->pBuffer[indexY];
+            int u = workingBuffer->pBuffer[indexU];
+            int v = workingBuffer->pBuffer[indexV];
+
+            int r = y + (1.370705 * (v-128));
+            int g = y - (0.698001 * (v-128)) - (0.337633 * (u-128));
+            int b = y + (1.732446 * (u-128));
+
+            *pMask = noise_level;
+            if ( r > 240 && g < 30 && b < 30 )
+                *pMask = 255;
+
+            ++pMask;
+        }
+    }
+}
+
 static void ProcessComposeBuffer(void)
 {
     if (outputBuffer == 0)
@@ -1613,6 +1865,30 @@ static void ProcessComposeBuffer(void)
                 composeBuffer[indexY] = workingBuffer->pBuffer[indexY];
                 composeBuffer[indexU] = workingBuffer->pBuffer[indexU];
                 composeBuffer[indexV] = workingBuffer->pBuffer[indexV];
+            }
+        }
+    }
+}
+
+static void OverlayMask(void)
+{
+    if (maskFrame == 0)
+        readMask();
+
+    for (int iy = 0; iy < 1080; ++iy)
+    {
+        for (int ix = 0; ix < 1920; ++ix)
+        {
+            int indexY = 1920 * iy + ix;
+            int indexU = 1920 * 1088 + 960 * (iy / 2) + (ix / 2);
+            int indexV = indexU + 1920 * 1088 / 4;
+
+            int indexMask = 640*(iy/3) + ix/3;
+
+            if ( maskFrame[indexMask] == 255 )
+            {
+                composeBuffer[indexU] = 116;
+                composeBuffer[indexV] = 140;
             }
         }
     }
@@ -1787,6 +2063,62 @@ static void composeLoop2(unsigned char* path)
 
     usleep(10000);
     ProcessComposeBuffer();
+}
+
+static void readJpegLoop(unsigned char* path)
+{
+    OMX_ERRORTYPE error = OMX_ErrorNone;
+    FILE* file;
+
+    file = fopen(path, "rb");
+    if (file == 0)
+        return;
+
+    int bufferIndex = 0;
+    outputBuffer = 0;
+
+    portSettingsChanged = 0;
+
+    for (;;)
+    {
+        OMX_BUFFERHEADERTYPE* pb = jpegBuffers[bufferIndex];
+        bufferIndex = (bufferIndex+1)%3;
+
+        pb->nOffset = 0;
+        pb->nInputPortIndex = 320;
+
+        int count = fread(pb->pBuffer, 1, pb->nAllocLen, file);
+        if ( count == 0 )
+            break;
+
+        if ( feof( file ) )
+            pb->nFlags = OMX_BUFFERFLAG_EOS;
+
+        pb->nFilledLen = count;
+        decodeBufferFull = 1;
+
+        error = OMX_EmptyThisBuffer(decoderHandle, pb);
+        if (error != OMX_ErrorNone)
+            omx_die( error, "Cannot Empty This Buffer");
+
+        pthread_mutex_lock(&composeBufferThreadMutex);
+        while (decodeBufferFull != 0)
+            pthread_cond_wait(&composeBufferThreadCondition, &composeBufferThreadMutex);
+
+        pthread_mutex_unlock(&composeBufferThreadMutex);
+
+        if ( pingBuffer == 0 )
+        {
+            usleep(100000);
+            if ( portSettingsChanged )
+                init_jpeg_output(decoderHandle, 321 );
+        }
+    }
+
+    fclose(file);
+
+    usleep(100000);
+    ProcessJpegMask();
 }
 
 static void averagerLoop2( const char* path )
@@ -1983,6 +2315,7 @@ static void *runThread(void *args)
     init_device(0);
     init_decoder();
     init_sentinel();
+    init_decoder();
     readMask();
     start_capturing();
     decodeLoop();
@@ -1995,6 +2328,17 @@ static void *runThread(void *args)
     return 0;
 }
 
+static void *maskThread(void *args)
+{
+    running = 1;
+
+    init_jpeg_decoder();
+    readJpegLoop("mask.jpg");
+    uninit_jpeg_decoder();
+
+    running = 0;
+}
+
 static void* composeThread(void *args)
 {
     running = 1;
@@ -2004,6 +2348,7 @@ static void* composeThread(void *args)
 
     init_decoder();
     composeLoop2( (unsigned char*)args );
+    OverlayMask();
     uninit_decoder();
 
     init_encoder();
@@ -2130,6 +2475,17 @@ static void runInteractiveLoop()
             token = strtok(NULL," \n\t\r");
 
             int rc = pthread_create(&averageThread_id, NULL, &averageThread, token );
+            printf( "=OK\n");
+        }
+        else if (!strcmp(token,"mask"))
+        {
+            if ( running )
+            {
+                printf( "=No\n" );
+                continue;
+            }
+
+            int rc = pthread_create(&maskThread_id, NULL, &maskThread, NULL );
             printf( "=OK\n");
         }
         else if (!strcmp(token,"set_noise"))

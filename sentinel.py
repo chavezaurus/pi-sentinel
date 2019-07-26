@@ -18,8 +18,8 @@ class SentinelServer(object):
         self.startTime = "21:30"
         self.stopTime  = "05:00"
 
-        if not os.path.exists("events"):
-            os.mkdir("events")
+        if not os.path.exists("new"):
+            os.mkdir("new")
         if not os.path.exists("saved"):
             os.mkdir("saved")
         if not os.path.exists("trash"):
@@ -79,7 +79,7 @@ class SentinelServer(object):
 
         #Wait for response from Sentinel Process
         while True:
-            if not self.y.poll(500):
+            if not self.y.poll(1000):
                 print("handleSentinelCommand: poll failed")
                 return
 
@@ -191,12 +191,12 @@ class SentinelServer(object):
     @cherrypy.expose
     @cherrypy.tools.json_in()
     @cherrypy.tools.json_out()
-    def events(self):
-        print("events")
+    def new(self):
+        print("new")
         data = cherrypy.request.json
         self.relocateCurrent(data)
 
-        mp4files = glob.glob("events/s*.mp4")
+        mp4files = glob.glob("new/s*.mp4")
         mp4files = sorted(list(map(os.path.basename,mp4files)))
         return mp4files
 
@@ -229,23 +229,28 @@ class SentinelServer(object):
     def get_state(self):
         print("get_state")
         response = {}
-        r = self.funnelCmd("get_frame_rate")
-        response["frameRate"] = float(r["response"])
-        r = self.funnelCmd("get_zenith_amplitude")
-        response["zenithAmplitude"] = float(r["response"])
-        r = self.funnelCmd("get_noise")
-        response["noiseThreshold"] = int(r["response"])
-        r = self.funnelCmd("get_sum_threshold")
-        response["sumThreshold"] = int(r["response"])
-        r = self.funnelCmd("get_max_events_per_hour")
-        response["eventsPerHour"] = int(r["response"])
-        r = self.funnelCmd("get_running")
-        response["running"] = r["response"]
-        response["startTime"] = {"h": int(self.startTime[0:2]), "m": int(self.startTime[3:5])}
-        response["stopTime"]  = {"h": int(self.stopTime[0:2]),  "m": int(self.stopTime[3:5])}
-        response["numEvents"] = len(glob.glob("events/*.mp4"))
-        response["numSaved"]  = len(glob.glob("saved/*.mp4"))
-        response["numTrashed"] = len(glob.glob("trash/*.mp4"))
+        try:
+            r = self.funnelCmd("get_frame_rate")
+            response["frameRate"] = float(r["response"])
+            r = self.funnelCmd("get_zenith_amplitude")
+            response["zenithAmplitude"] = float(r["response"])
+            r = self.funnelCmd("get_noise")
+            response["noiseThreshold"] = int(r["response"])
+            r = self.funnelCmd("get_sum_threshold")
+            response["sumThreshold"] = int(r["response"])
+            r = self.funnelCmd("get_max_events_per_hour")
+            response["eventsPerHour"] = int(r["response"])
+            r = self.funnelCmd("get_running")
+            response["running"] = r["response"]
+            response["startTime"] = {"h": int(self.startTime[0:2]), "m": int(self.startTime[3:5])}
+            response["stopTime"]  = {"h": int(self.stopTime[0:2]),  "m": int(self.stopTime[3:5])}
+            response["numNew"]     = len(glob.glob("new/*.mp4"))
+            response["numSaved"]   = len(glob.glob("saved/*.mp4"))
+            response["numTrashed"] = len(glob.glob("trash/*.mp4"))
+        except Exception as inst:
+            print(inst)
+            return {}
+
         return response
 
     @cherrypy.expose
@@ -307,9 +312,9 @@ conf =  {
                 'tools.staticdir.on': True,
                 'tools.staticdir.dir': 'public'
             },
-            '/events': {
+            '/new': {
                 'tools.staticdir.on': True,
-                'tools.staticdir.dir': 'events'
+                'tools.staticdir.dir': 'new'
             },
             '/saved': {
                 'tools.staticdir.on': True,

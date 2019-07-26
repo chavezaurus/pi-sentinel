@@ -29,9 +29,9 @@ let UpdateEvents = function(fromDir) {
 var DoTable = {
     view: function() {
         return m("pure-button-group", {role: "group", "aria-label": "Group"}, [
-            m("button.pure-button", {onclick: function() {UpdateEvents("events")}}, "Events"),
-            m("button.pure-button", {onclick: function() {UpdateEvents("saved")}},  "Saved"),
-            m("button.pure-button", {onclick: function() {UpdateEvents("trash")}},  "Trash"),
+            m("button.pure-button", {onclick: function() {UpdateEvents("new")}},   "New"),
+            m("button.pure-button", {onclick: function() {UpdateEvents("saved")}}, "Saved"),
+            m("button.pure-button", {onclick: function() {UpdateEvents("trash")}}, "Trash"),
         ])
     }
 }
@@ -80,12 +80,12 @@ let ClickTable = function(e) {
     if ( column === 1 ) {
         var toDir = tableItems[row].to;
 
-        if ( toDir === "events" ) {
+        if ( toDir === "new" ) {
             toDir = "trash";
         } else if ( toDir === "trash" ) {
             toDir = "saved";
         } else if ( toDir === "saved" ) {
-            toDir = "events";
+            toDir = "new";
         }
 
         tableItems[row].to = toDir;
@@ -151,9 +151,9 @@ let Video = {
 let Table = {
     view: function() {
         let toTable = {
-            "events": "td.whiteCell",
-            "trash":  "td.redCell",
-            "saved":  "td.goldCell" };
+            "new":   "td.whiteCell",
+            "trash": "td.redCell",
+            "saved": "td.goldCell" };
 
         return m("table.pure-table", [
             m("thead", m("tr", [
@@ -193,7 +193,7 @@ var sentinelState = {
     frameRate: 30.0,
     zenithAmplitude: 0.0,
     running: "No",
-    numEvents: 0,
+    numNew: 0,
     numSaved: 0,
     numTrashed: 0
 }
@@ -217,7 +217,11 @@ let SubmitControls = function() {
 let RequestControls = function() {
     m.request({url: "get_state"})
     .then(function(result) {
-        sentinelState = result;
+        if ( Object.keys(result).length === 0 ) {
+            alert( "Get State failed");
+        } else {
+            sentinelState = result;
+        }
     })
     .catch(function(e) {
         console.log( e.code );
@@ -262,14 +266,8 @@ let TimerPickers = {
             m("div.citem-left", "Running:"),
             m("div.citem-right", sentinelState.running ),
 
-            m("div.citem-left", "Events:"),
-            m("div.citem-right", sentinelState.numEvents ),
-
-            m("div.citem-left", "Saved:"),
-            m("div.citem-right", sentinelState.numSaved ),
-
-            m("div.citem-left", "Trash:"),
-            m("div.citem-right", sentinelState.numTrashed ),
+            m("div.citem-left", "New, Saved, Trash:"),
+            m("div.citem-right", "" + sentinelState.numNew + ", " + sentinelState.numSaved + ", " + sentinelState.numTrashed),
 
             m("div.citem-left", "Frame Rate:" ),
             m("div.citem-right", sentinelState.frameRate ),
