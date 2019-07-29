@@ -6,6 +6,8 @@ var selectedRow = null;
 var showControls = false;
 var showComposite = false;
 
+var eventsShown = "";
+
 var eventTimeString = "";
 
 let UpdateEvents = function(fromDir) {
@@ -15,6 +17,7 @@ let UpdateEvents = function(fromDir) {
         body: tableItems
     })
     .then(function(result) {
+        eventsShown = fromDir;
         tableItems = result.map( function(item) {
             return {event: item, from: fromDir, to: fromDir, selected: false};
         });
@@ -24,17 +27,59 @@ let UpdateEvents = function(fromDir) {
     .catch(function(e) {
         console.log( e.code );
     })
-}
+};
 
-var DoTable = {
+let DoHeader = {
     view: function() {
-        return m("pure-button-group", {role: "group", "aria-label": "Group"}, [
-            m("button.pure-button", {onclick: function() {UpdateEvents("new")}},   "New"),
-            m("button.pure-button", {onclick: function() {UpdateEvents("saved")}}, "Saved"),
-            m("button.pure-button", {onclick: function() {UpdateEvents("trash")}}, "Trash"),
+        let eventsClass   =  showControls ? "button.pure-button" : "button.pure-button.bselect";
+        let controlsClass = (!showControls) ? "button.pure-button" : "button.pure-button.bselect";
+
+        return m("div.header", [
+            m("h1", "Pi Sentinel"),
+            m("pure-button-group", {role: "group", "aria-label": "Controls or Events Page"}, [
+                m(controlsClass, {onclick: function() {
+                    showControls = true;
+                    RequestControls();
+                }}, "Controls"),
+                m(eventsClass, {onclick: function() {
+                    showControls = false;
+                    RequestControls();
+                }}, "Events")
+            ])
         ])
     }
+};
+
+/*
+let DoHeader = {
+    view: function() {
+        return m("div.header", [
+            m("h1", "Pi Sentinel"),
+            m("button.pure-button", 
+                {onclick: function(){
+                    showControls=!showControls;
+                    RequestControls();
+                }}, 
+                showControls ? "Show Event Tables" : "Show Controls Form")
+        ]);
+    }
 }
+*/
+
+
+let DoTable = {
+    view: function() {
+        let newClass   = eventsShown !== "new"   ? "button.pure-button" : "button.pure-button.bselect";
+        let savedClass = eventsShown !== "saved" ? "button.pure-button" : "button.pure-button.bselect";
+        let trashClass = eventsShown !== "trash" ? "button.pure-button" : "button.pure-button.bselect";
+
+        return m("pure-button-group", {role: "group", "aria-label": "Event List Selection"}, [
+            m(newClass,   {onclick: function() {UpdateEvents("new")}},   "New"),
+            m(savedClass, {onclick: function() {UpdateEvents("saved")}}, "Saved"),
+            m(trashClass, {onclick: function() {UpdateEvents("trash")}}, "Trash"),
+        ])
+    }
+};
 
 var videoSource = null;
 var videoPoster = null;
@@ -55,7 +100,7 @@ let CheckForPoster = function( path ) {
     .catch(function(e) {
         console.log( e.code );
     })
-}
+};
 
 let MakeComposite = function( path ) {
     m.request({
@@ -65,13 +110,13 @@ let MakeComposite = function( path ) {
     })
     .then( function(result) {
         if ( result.response !== "OK") {
-            alert( "Make composite failed");
+            alert( "Cannot make composite while running");
         }
     })
     .catch(function(e) {
         console.log( e.code );
     })
-}
+};
 
 let ClickTable = function(e) {
     let row = e.target.parentElement.rowIndex-1;
@@ -101,6 +146,9 @@ let ClickTable = function(e) {
         rowObj.selected = true;
         videoSource = rowObj.from+'/'+rowObj.event;
         posterTest = videoSource.replace(".mp4",".jpg");
+        if ( e.shiftKey ) {
+            posterTest = videoSource.replace(".mp4", "m.jpg");
+        }
         if ( posterTest === videoPoster ) {
             showComposite = !showComposite;
         } else if ( e.altKey ) {
@@ -128,7 +176,7 @@ let ClickTable = function(e) {
 
         eventTimeString = date.toLocaleString();
     }
-}
+};
 
 let Video = {
     view: function() {
@@ -146,7 +194,7 @@ let Video = {
                 })
             ])
         }
-}
+};
 
 let Table = {
     view: function() {
@@ -168,21 +216,7 @@ let Table = {
         ]
         );
     }
-}
-
-let DoHeader = {
-    view: function() {
-        return m("div.header", [
-            m("h1", "Pi Sentinel"),
-            m("button.pure-button", 
-                {onclick: function(){
-                    showControls=!showControls;
-                    RequestControls();
-                }}, 
-                showControls ? "Show Event Tables" : "Show Controls Form")
-        ]);
-    }
-}
+};
 
 var sentinelState = {
     startTime: { h: 21, m:  0 },
@@ -196,7 +230,7 @@ var sentinelState = {
     numNew: 0,
     numSaved: 0,
     numTrashed: 0
-}
+};
 
 let SubmitControls = function() {
     m.request({
@@ -212,7 +246,7 @@ let SubmitControls = function() {
     .catch(function(e) {
         console.log( e.code );
     })
-}
+};
 
 let RequestControls = function() {
     m.request({url: "get_state"})
@@ -226,7 +260,7 @@ let RequestControls = function() {
     .catch(function(e) {
         console.log( e.code );
     })
-}
+};
 
 let ToggleStartStop = function() {
     m.request({
@@ -241,7 +275,7 @@ let ToggleStartStop = function() {
     .catch(function(e) {
         console.log( e.code );
     })
-}
+};
 
 let ForceTrigger = function() {
     m.request({
@@ -256,7 +290,7 @@ let ForceTrigger = function() {
     .catch(function(e) {
         console.log( e.code );
     })
-}
+};
 
 let TimerPickers = {
     view: function() {
@@ -293,7 +327,7 @@ let TimerPickers = {
             m("button.pure-button.citem-submit.[type=submit]", "Submit")
         ]);
     }
-}
+};
 
 let ControlStuff = {
     view: function() {
@@ -304,7 +338,7 @@ let ControlStuff = {
             m(TimerPickers)
         ]);
     }
-}
+};
 
 let Layout = {
     view: function() {
@@ -325,6 +359,6 @@ let Layout = {
             ]);
         }
     }
-}
+};
 
 m.mount(root, Layout );

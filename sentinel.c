@@ -613,11 +613,12 @@ static int decode_frame(void)
 
     assert(buf.index < n_buffers);
 
-    if ( decodeBufferFull == 1 )
-    {
-        fprintf(stderr, "Input buffer not ready\n");
-        usleep(10000);
-    }
+    pthread_mutex_lock(&composeBufferThreadMutex);
+    while (decodeBufferFull != 0)
+        pthread_cond_wait(&composeBufferThreadCondition, &composeBufferThreadMutex);
+
+    decodeBufferFull = 1;
+    pthread_mutex_unlock(&composeBufferThreadMutex);
 
     memcpy(decoderBuffer->pBuffer, buffers[buf.index].start, buf.bytesused);
     decoderBuffer->nFilledLen = buf.bytesused;
@@ -625,8 +626,6 @@ static int decode_frame(void)
     decoderBuffer->nInputPortIndex = 130;
     decoderBuffer->nTimeStamp.nLowPart = timeStamp_lo;
     decoderBuffer->nTimeStamp.nHighPart = timeStamp_hi;
-
-    decodeBufferFull = 1;
 
     // fprintf( logfile, "->--- %u\n", timeStamp_lo );
     error = OMX_EmptyThisBuffer(decoderHandle, decoderBuffer);
@@ -1260,21 +1259,27 @@ static void init_decoder(void)
         omx_die( error, "Could not set parameter");
 
     // It appears that ports are already enabled so these are not needed
-    // error = error || OMX_SendCommand ( decoderHandle, OMX_CommandPortEnable, 130, NULL);
-    // error = error || OMX_SendCommand ( decoderHandle, OMX_CommandPortEnable, 131, NULL);
-    error = error || OMX_SendCommand(decoderHandle, OMX_CommandStateSet, OMX_StateIdle, NULL);
+    // error = OMX_SendCommand ( decoderHandle, OMX_CommandPortEnable, 130, NULL);
+    // error = OMX_SendCommand ( decoderHandle, OMX_CommandPortEnable, 131, NULL);
+    error = OMX_SendCommand(decoderHandle, OMX_CommandStateSet, OMX_StateIdle, NULL);
     if (error != OMX_ErrorNone)
         omx_die( error, "Could not send command");
 
-    error = error || OMX_AllocateBuffer(decoderHandle, &decoderBuffer, 130, NULL, inputBufferSize);
-    error = error || OMX_AllocateBuffer(decoderHandle, &pingBuffer, 131, NULL, paramPort.nBufferSize);
-    error = error || OMX_AllocateBuffer(decoderHandle, &pongBuffer, 131, NULL, paramPort.nBufferSize);
+    error = OMX_AllocateBuffer(decoderHandle, &decoderBuffer, 130, NULL, inputBufferSize);
     if (error != OMX_ErrorNone)
-        omx_die( error, "Could not allocate buffers");
+        omx_die( error, "Could not allocate decode buffer");
+
+    error = OMX_AllocateBuffer(decoderHandle, &pingBuffer, 131, NULL, paramPort.nBufferSize);
+    if (error != OMX_ErrorNone)
+        omx_die( error, "Could not allocate ping buffer");
+
+    error = OMX_AllocateBuffer(decoderHandle, &pongBuffer, 131, NULL, paramPort.nBufferSize);
+    if (error != OMX_ErrorNone)
+        omx_die( error, "Could not allocate pong buffer");
 
     outputBuffer = 0;
 
-    error = error || OMX_SendCommand(decoderHandle, OMX_CommandStateSet, OMX_StateExecuting, NULL);
+    error = OMX_SendCommand(decoderHandle, OMX_CommandStateSet, OMX_StateExecuting, NULL);
     if (error != OMX_ErrorNone)
         omx_die( error, "Could not send commands");
 
@@ -1498,9 +1503,9 @@ static void init_encoder(void)
         omx_die( error, "Cannot set encoder parameter");
 
     // It appears that ports are already enabled so these are not needed
-    // error = error || OMX_SendCommand ( encoderHandle, OMX_CommandPortEnable, 340, NULL);
-    // error = error || OMX_SendCommand ( encoderHandle, OMX_CommandPortEnable, 341, NULL);
-    error = error || OMX_SendCommand( encoderHandle, OMX_CommandStateSet, OMX_StateIdle, NULL);
+    // error = OMX_SendCommand ( encoderHandle, OMX_CommandPortEnable, 340, NULL);
+    // error = OMX_SendCommand ( encoderHandle, OMX_CommandPortEnable, 341, NULL);
+    error = OMX_SendCommand( encoderHandle, OMX_CommandStateSet, OMX_StateIdle, NULL);
     if (error != OMX_ErrorNone)
         omx_die( error, "Cannot send command");
 
@@ -1526,7 +1531,7 @@ static void init_encoder(void)
 
     outputBuffer = 0;
 
-    error = error || OMX_SendCommand(encoderHandle, OMX_CommandStateSet, OMX_StateExecuting, NULL);
+    error = OMX_SendCommand(encoderHandle, OMX_CommandStateSet, OMX_StateExecuting, NULL);
     if (error != OMX_ErrorNone)
         omx_die( error, "Cannot send commands");
 }
@@ -1535,16 +1540,25 @@ static void uninit_encoder(void)
 {
     OMX_ERRORTYPE error = OMX_ErrorNone;
 
-    error = error || OMX_SendCommand(encoderHandle, OMX_CommandStateSet, OMX_StateIdle, NULL);
-    error = error || OMX_SendCommand(encoderHandle, OMX_CommandPortDisable, 340, NULL);
-    error = error || OMX_SendCommand(encoderHandle, OMX_CommandPortDisable, 341, NULL);
+    error = OMX_SendCommand(encoderHandle, OMX_CommandStateSet, OMX_StateIdle, NULL);
     if (error != OMX_ErrorNone)
-        omx_die( error, "Cannot send commands");
+        omx_die( error, "Cannot set idle state");
 
-    error = error || OMX_FreeBuffer(encoderHandle, 340, encoderBuffer);
-    error = error || OMX_FreeBuffer(encoderHandle, 341, imageBuffer);
+    error = OMX_SendCommand(encoderHandle, OMX_CommandPortDisable, 340, NULL);
     if (error != OMX_ErrorNone)
-        omx_die( error, "Cannot free buffers");
+        omx_die( error, "Cannot disable port 340");
+
+    error = OMX_SendCommand(encoderHandle, OMX_CommandPortDisable, 341, NULL);
+    if (error != OMX_ErrorNone)
+        omx_die( error, "Cannot disable port 341");
+
+    error = OMX_FreeBuffer(encoderHandle, 340, encoderBuffer);
+    if (error != OMX_ErrorNone)
+        omx_die( error, "Cannot free encoder buffer");
+
+    error = OMX_FreeBuffer(encoderHandle, 341, imageBuffer);
+    if (error != OMX_ErrorNone)
+        omx_die( error, "Cannot free image buffer");
 
     error = OMX_FreeHandle(encoderHandle);
     if (error != OMX_ErrorNone)
@@ -1923,94 +1937,7 @@ static int ProcessAverageBuffer(void)
     return 1;
 }
 
-static void composeLoop(void)
-{
-    OMX_ERRORTYPE error = OMX_ErrorNone;
-    char buffer[4096];
-
-    char yuvName[100];
-    char jpgName[100];
-
-    char cmd[1000];
-
-    FILE *file = fopen(h264_name, "rb");
-    if (file == 0)
-        return;
-
-    outputBuffer = 0;
-    composeBuffer = (char *)malloc(1920 * 1088 * 3 / 2);
-    memset(composeBuffer, 0, 1920 * 1088 * 3 / 2);
-
-    int count = fread(buffer, 1, 4096, file);
-
-    decoderBuffer->nOffset = 0;
-    decoderBuffer->nInputPortIndex = 130;
-
-    while (count > 0)
-    {
-        decodeBufferFull = 1;
-
-        decoderBuffer->nFilledLen = count;
-        memcpy(decoderBuffer->pBuffer, buffer, count);
-        error = OMX_EmptyThisBuffer(decoderHandle, decoderBuffer);
-
-        if (error != OMX_ErrorNone)
-        {
-            fprintf(stderr, "Cannot EmptyThisBuffer: %d, %s\n",
-                    errno, strerror(errno));
-
-            if (logfile != 0)
-            {
-                fflush(logfile);
-                fclose(logfile);
-            }
-
-            exit(EXIT_FAILURE);
-        }
-
-        ProcessComposeBuffer();
-        while (decodeBufferFull)
-        {
-            usleep(5000);
-            ProcessComposeBuffer();
-        }
-
-        count = fread(buffer, 1, 4096, file);
-    }
-
-    fclose(file);
-
-    strncpy(yuvName, h264_name, 99);
-    strncpy(jpgName, h264_name, 99);
-
-    char *pDot = strrchr(yuvName, '.');
-    if (pDot)
-        strcpy(pDot, ".yuv");
-    else
-        strcat(yuvName, ".yuv");
-
-    pDot = strrchr(jpgName, '.');
-    if (pDot)
-        strcpy(pDot, ".jpg");
-    else
-        strcat(jpgName, ".jpg");
-
-    sprintf(cmd, "ffmpeg -s 1920x1080 -pix_fmt yuv420p -i %s %s", yuvName, jpgName);
-
-    FILE *fraw = fopen(yuvName, "wb");
-    if (fraw == 0)
-        return;
-
-    fwrite(composeBuffer, 1, 1920 * 1080, fraw);
-    fwrite(composeBuffer + 1920 * 1088, 1, 1920 * 1080 / 4, fraw);
-    fwrite(composeBuffer + 1920 * 1088 + 1920 * 1088 / 4, 1, 1920 * 1080 / 4, fraw);
-    fclose(fraw);
-    free(composeBuffer);
-
-    system(cmd);
-}
-
-static void composeLoop2(unsigned char* path)
+static void composeLoop(unsigned char* path)
 {
     OMX_ERRORTYPE error = OMX_ErrorNone;
     char buffer[4096];
@@ -2121,7 +2048,7 @@ static void readJpegLoop(unsigned char* path)
     ProcessJpegMask();
 }
 
-static void averagerLoop2( const char* path )
+static void averagerLoop( const char* path )
 {
     OMX_ERRORTYPE error = OMX_ErrorNone;
     const char *buffer[4096];
@@ -2193,8 +2120,6 @@ static void averagerLoop2( const char* path )
 
 static void EncodeLoop(const char* path)
 {
-    char jpgPath[255];
-
     OMX_ERRORTYPE error = OMX_ErrorNone;
     outputBuffer = 0;
 
@@ -2214,15 +2139,7 @@ static void EncodeLoop(const char* path)
         usleep(10000);
     }
 
-    strncpy(jpgPath, path, 254);
-
-    char *pDot = strrchr(jpgPath, '.');
-    if (pDot)
-        strcpy(pDot, ".jpg");
-    else
-        strcat(jpgPath, ".jpg");
-
-    FILE* file = fopen(jpgPath, "wb");
+    FILE* file = fopen(path, "wb");
     if ( file == 0 )
         return;
 
@@ -2230,83 +2147,6 @@ static void EncodeLoop(const char* path)
     fclose(file);
 
     outputBuffer = 0;
-}
-
-static void averagerLoop(void)
-{
-    OMX_ERRORTYPE error = OMX_ErrorNone;
-    const char *buffer[4096];
-
-    FILE *file = fopen(h264_name, "rb");
-    if (file == 0)
-        return;
-
-    outputBuffer = 0;
-    averageBuffer = (int *)malloc(sizeof(int) * 1920 * 1088 * 3 / 2);
-    composeBuffer = (char *)malloc(1920 * 1088 * 3 / 2);
-
-    memset(averageBuffer, 0, sizeof(int) * 1920 * 1088 * 3 / 2);
-    memset(composeBuffer, 128, 1920 * 1088 * 3 / 2);
-
-    int count = fread(buffer, 1, 4096, file);
-
-    decoderBuffer->nOffset = 0;
-    decoderBuffer->nInputPortIndex = 130;
-
-    int frameCount = 0;
-
-    while (count > 0)
-    {
-        decodeBufferFull = 1;
-
-        decoderBuffer->nFilledLen = count;
-        memcpy(decoderBuffer->pBuffer, buffer, count);
-        error = OMX_EmptyThisBuffer(decoderHandle, decoderBuffer);
-
-        if (error != OMX_ErrorNone)
-        {
-            fprintf(stderr, "Cannot EmptyThisBuffer: %d, %s\n",
-                    errno, strerror(errno));
-
-            if (logfile != 0)
-            {
-                fflush(logfile);
-                fclose(logfile);
-            }
-
-            exit(EXIT_FAILURE);
-        }
-
-        frameCount += ProcessAverageBuffer();
-        while (decodeBufferFull)
-        {
-            usleep(5000);
-            frameCount += ProcessAverageBuffer();
-        }
-
-        count = fread(buffer, 1, 4096, file);
-    }
-
-    fclose(file);
-
-    FILE *fraw = fopen("averaged.yuv", "wb");
-    if (fraw == 0)
-        return;
-
-    printf("Frames: %d\n", frameCount);
-
-    for (int i = 0; frameCount != 0 && i < 1920 * 1080; ++i)
-    {
-        int scaled = 10 * averageBuffer[i] / frameCount;
-        composeBuffer[i] = (scaled > 255) ? 255 : scaled;
-    }
-
-    fwrite(composeBuffer, 1, 1920 * 1080, fraw);
-    fwrite(composeBuffer + 1920 * 1088, 1, 1920 * 1080 / 4, fraw);
-    fwrite(composeBuffer + 1920 * 1088 + 1920 * 1088 / 4, 1, 1920 * 1080 / 4, fraw);
-    fclose(fraw);
-    free(averageBuffer);
-    free(composeBuffer);
 }
 
 static void *runThread(void *args)
@@ -2341,18 +2181,35 @@ static void *maskThread(void *args)
 
 static void* composeThread(void *args)
 {
+    char path[255];
+
     running = 1;
 
     composeBuffer = (char *)malloc(1920 * 1088 * 3 / 2);
     memset(composeBuffer, 0, 1920 * 1088 * 3 / 2);
 
     init_decoder();
-    composeLoop2( (unsigned char*)args );
-    OverlayMask();
+    composeLoop( (unsigned char*)args );
     uninit_decoder();
 
+    strncpy( path, (char *)args, 254 );
+
+    char *pDot = strrchr(path, '.');
+    if (pDot)
+        strcpy(pDot, ".jpg");
+    else
+        strcat(path, ".jpg");
+
     init_encoder();
-    EncodeLoop( (unsigned char*)args );
+    EncodeLoop( path );
+
+    if (pDot)
+        strcpy(pDot, "m.jpg");
+    else
+        strcat(path, "m.jpg");
+
+    OverlayMask();
+    EncodeLoop( path );
     uninit_encoder();
 
     free(composeBuffer);
@@ -2362,17 +2219,27 @@ static void* composeThread(void *args)
 
 static void* averageThread(void *args)
 {
+    char path[255];
+
     running = 1;
 
     composeBuffer = (char *)malloc(1920 * 1088 * 3 / 2);
     memset(composeBuffer, 0, 1920 * 1088 * 3 / 2);
 
     init_decoder();
-    averagerLoop2( (unsigned char*)args );
+    averagerLoop( (unsigned char*)args );
     uninit_decoder();
 
+    strncpy( path, (char *)args, 254 );
+
+    char *pDot = strrchr(path, '.');
+    if (pDot)
+        strcpy(pDot, ".jpg");
+    else
+        strcat(path, ".jpg");
+
     init_encoder();
-    EncodeLoop( (unsigned char*)args );
+    EncodeLoop( path );
     uninit_encoder();
 
     free(composeBuffer);
@@ -2557,8 +2424,6 @@ static void usage(FILE *fp, int argc, char **argv)
             "Version 1.3\n"
             "Options:\n"
             "-d | --device name   Video device name [%s]\n"
-            "-p | --compose file  H264 file name [%s]\n"
-            "-a | --average file  H264 file name [%s]\n"
             "-j | --jpeg          Output single jpeg image\n"
             "-m | --mpeg          Get MPEG video\n"
             "-h | --help          Print this message\n"
@@ -2571,13 +2436,11 @@ static void usage(FILE *fp, int argc, char **argv)
             argv[0], dev_name, h264_name, h264_name, frame_count, force_count, noise_level);
 }
 
-static const char short_options[] = "d:p:a:jmc:f:n:i";
+static const char short_options[] = "d:jmc:f:n:i";
 
 static const struct option
     long_options[] = {
         {"device", required_argument, NULL, 'd'},
-        {"compose", required_argument, NULL, 'p'},
-        {"average", required_argument, NULL, 'a'},
         {"jpeg", no_argument, NULL, 'j'},
         {"mpeg", no_argument, NULL, 'm'},
         {"help", no_argument, NULL, 'h'},
@@ -2616,16 +2479,6 @@ int main(int argc, char **argv)
 
         case 'd':
             dev_name = optarg;
-            break;
-
-        case 'p':
-            composeH264 = 1;
-            h264_name = optarg;
-            break;
-
-        case 'a':
-            averageH264 = 1;
-            h264_name = optarg;
             break;
 
         case 'h':
@@ -2709,28 +2562,6 @@ int main(int argc, char **argv)
         close_device();
         if (logfile != 0)
             fclose(logfile);
-
-        return 0;
-    }
-
-    if (composeH264)
-    {
-        bcm_host_init();
-
-        init_decoder();
-        composeLoop();
-        uninit_decoder();
-
-        return 0;
-    }
-
-    if (averageH264)
-    {
-        bcm_host_init();
-
-        init_decoder();
-        averagerLoop();
-        uninit_decoder();
 
         return 0;
     }

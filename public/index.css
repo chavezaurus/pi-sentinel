@@ -77,6 +77,10 @@ table {
 .rselect {
     background: rgb(91,109,123);
 }
+
+.bselect {
+    background: rgb(203,220,235);
+}
   
 .hello {
     padding: 20px 0;

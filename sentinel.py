@@ -187,6 +187,8 @@ class SentinelServer(object):
                 os.rename( fromPath+".txt",  toPath+".txt")
                 if os.path.exists( fromPath+".jpg"):
                     os.rename( fromPath+".jpg", toPath+".jpg" )
+                if os.path.exists( fromPath+"m.jpeg"):
+                    os.rename( fromPath+"m.jpeg", toPath+"m.jpg")
 
     @cherrypy.expose
     @cherrypy.tools.json_in()
