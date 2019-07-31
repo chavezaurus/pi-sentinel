@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <mcheck.h>
 
 #include <getopt.h> /* getopt_long() */
 
@@ -62,7 +63,7 @@ static int  *averageBuffer;
 static char *dev_name;
 static char *h264_name;
 static int fd = -1;
-struct buffer *buffers;
+struct buffer buffers[10];
 static unsigned int n_buffers;
 static int out_buf;
 static int decodeBufferFull;
@@ -76,6 +77,7 @@ static unsigned char *referenceFrame = 0;
 static unsigned char *maskFrame = 0;
 
 static unsigned char *frameBuffers[FRAMES_TO_KEEP];
+static int frameAlloc[FRAMES_TO_KEEP];
 static int frameSizes[FRAMES_TO_KEEP];
 static int frameTimestamps[FRAMES_TO_KEEP];
 static int nextFrameIndex;
@@ -128,6 +130,7 @@ static pthread_t runThread_id;
 
 static int thread_exit;
 static int running = 0;
+static int stop_flag = 0;
 
 #define ALIGN(x, y) (((x) + ((y)-1)) & ~((y)-1))
 
@@ -337,7 +340,8 @@ static void uninit_device(void)
         if (-1 == munmap(buffers[i].start, buffers[i].length))
             errno_exit("munmap");
 
-    free(buffers);
+    // fprintf(stderr, "Free buffers\n");
+    // free(buffers);
 }
 
 static void init_mmap(void)
@@ -372,13 +376,13 @@ static void init_mmap(void)
         exit(EXIT_FAILURE);
     }
 
-    buffers = calloc(req.count, sizeof(*buffers));
+    // buffers = calloc(req.count, sizeof(*buffers));
 
-    if (!buffers)
-    {
-        fprintf(stderr, "Out of memory\n");
-        exit(EXIT_FAILURE);
-    }
+    // if (!buffers)
+    //{
+    //    fprintf(stderr, "Out of memory\n");
+    //    exit(EXIT_FAILURE);
+    //}
 
     for (n_buffers = 0; n_buffers < req.count; ++n_buffers)
     {
@@ -503,6 +507,7 @@ static void close_device(void)
         errno_exit("close");
 
     fd = -1;
+    fprintf(stderr, "Close device\n");
 }
 
 static void open_device(void)
@@ -542,13 +547,13 @@ EventHandler(OMX_OUT OMX_HANDLETYPE hComponent,
 {
     if ( eEvent == OMX_EventPortSettingsChanged )
     {
-        printf("Port Settings Changed\n");
+        fprintf(stderr, "Port Settings Changed\n");
         fflush(stdout);
         portSettingsChanged = 1;
     } 
     else 
     {
-        printf("EventHandler %d %x\n", eEvent, Data1);
+        fprintf(stderr, "EventHandler %d %x\n", eEvent, Data1);
         fflush(stdout);
     }
     return OMX_ErrorNone;
@@ -556,6 +561,18 @@ EventHandler(OMX_OUT OMX_HANDLETYPE hComponent,
 
 static void keepFrames(const unsigned char *p, int size, unsigned int timeStamp_lo)
 {
+    static int alloc_size = 8192;
+
+    while ( size > alloc_size )
+        alloc_size += 8192;
+
+    if ( frameAlloc[nextFrameIndex] < size )
+    {
+        free(frameBuffers[nextFrameIndex]);
+        frameBuffers[nextFrameIndex] = (unsigned char *)malloc(alloc_size);
+        frameAlloc[nextFrameIndex] = alloc_size;
+    }
+
     frameBuffers[nextFrameIndex] = (unsigned char *)realloc(frameBuffers[nextFrameIndex], size);
     frameSizes[nextFrameIndex] = size;
     frameTimestamps[nextFrameIndex] = timeStamp_lo;
@@ -736,10 +753,9 @@ static void saveEventJob(void)
     if (pstr == 0)
         return;
 
-    printf("Event: %04d/%02d/%02d %02d:%02d:%02d\n",
+    fprintf(stderr, "Event: %04d/%02d/%02d %02d:%02d:%02d\n",
            ptm->tm_year + 1900, ptm->tm_mon + 1, ptm->tm_mday,
            ptm->tm_hour, ptm->tm_min, ptm->tm_sec);
-    fflush(stdout);
 
     strcpy(pstr, "mp4");
 
@@ -1126,14 +1142,13 @@ static void decodeLoop(void)
 {
     unsigned int count;
     unsigned int loopIsInfinite = 0;
-    running = 1;
 
     if (frame_count == 0)
         loopIsInfinite = 1; //infinite loop
     count = frame_count;
     decodeBufferFull = 0;
 
-    while (running && (count-- > 0 || loopIsInfinite))
+    while (!stop_flag && (count-- > 0 || loopIsInfinite))
     {
         for (;;)
         {
@@ -1250,7 +1265,9 @@ static void init_decoder(void)
     paramPort.format.video.nFrameWidth = 1920;
     paramPort.format.video.nFrameHeight = 1080;
     paramPort.format.video.nStride = ALIGN(paramPort.format.video.nFrameWidth, 32);
-    paramPort.format.image.nSliceHeight = ALIGN(paramPort.format.video.nFrameHeight, 16);
+    paramPort.format.video.nSliceHeight = ALIGN(paramPort.format.video.nFrameHeight, 16);
+    paramPort.format.video.eColorFormat=OMX_COLOR_FormatYUV420PackedPlanar;
+
     paramPort.nBufferSize = paramPort.format.image.nStride *
                             paramPort.format.image.nSliceHeight * 3 / 2;
 
@@ -1593,6 +1610,7 @@ static void init_sentinel(void)
     for (int i = 0; i < FRAMES_TO_KEEP; ++i)
     {
         frameBuffers[i] = 0;
+        frameAlloc[i] = 0;
         frameSizes[i] = 0;
         sumBuffers[i] = 0;
         sumCounts[i] = 0;
@@ -1648,9 +1666,19 @@ static void uninit_sentinel(void)
     pthread_join(saveEventThread_id, NULL);
     pthread_join(decodeBufferThread_id, NULL);
 
+    // fprintf(stderr, "Free testFrame\n");
     free(testFrame);
+    // fprintf(stderr, "Free referenceFrame\n");
     free(referenceFrame);
+    // fprintf(stderr, "Free maskFrame\n");
     free(maskFrame);
+
+    fprintf(stderr, "Free frameBuffers\n");
+    for ( int i = 0; i < FRAMES_TO_KEEP; ++i )
+    {
+        free(frameBuffers[i]);
+        frameAlloc[i] = 0;
+    }
 
     testFrame = 0;
     referenceFrame = 0;
@@ -1674,20 +1702,20 @@ static void uninit_decoder(void)
     if (error != OMX_ErrorNone)
         omx_die( error, "Could not disable port 131");
 
-    error = OMX_FreeBuffer(decoderHandle, 130, decoderBuffer);
+    error = OMX_FreeBuffer(decoderHandle, 131, pongBuffer);
     if (error != OMX_ErrorNone)
-        omx_die( error, "Could not free decoder buffer");
-    decoderBuffer = 0;
+        omx_die( error, "Could not free pong buffer");
+    pongBuffer = 0;
 
     error = OMX_FreeBuffer(decoderHandle, 131, pingBuffer);
     if (error != OMX_ErrorNone)
         omx_die( error, "Could not free ping buffer");
     pingBuffer = 0;
 
-    error = OMX_FreeBuffer(decoderHandle, 131, pongBuffer);
+    error = OMX_FreeBuffer(decoderHandle, 130, decoderBuffer);
     if (error != OMX_ErrorNone)
-        omx_die( error, "Could not free pong buffer");
-    pongBuffer = 0;
+        omx_die( error, "Could not free decoder buffer");
+    decoderBuffer = 0;
 
     error = OMX_FreeHandle(decoderHandle);
     if (error != OMX_ErrorNone)
@@ -1752,7 +1780,7 @@ static void readMask(void)
     FILE *file = fopen("mask.ppm", "rb");
     if (file == 0)
     {
-        printf("No mask file found. Noise level set to: %d\n", noise_level);
+        fprintf(stderr, "No mask file found. Noise level set to: %d\n", noise_level);
         return;
     }
 
@@ -2151,11 +2179,12 @@ static void EncodeLoop(const char* path)
 
 static void *runThread(void *args)
 {
+    running = 1;
+
     open_device();
     init_device(0);
     init_decoder();
     init_sentinel();
-    init_decoder();
     readMask();
     start_capturing();
     decodeLoop();
@@ -2164,6 +2193,8 @@ static void *runThread(void *args)
     uninit_decoder();
     uninit_device();
     close_device();
+
+    running = 0;
 
     return 0;
 }
@@ -2247,18 +2278,18 @@ static void* averageThread(void *args)
     running = 0;
 }
 
-static void runInteractiveLoop()
+static void runInteractiveLoop( int mum )
 {
     char cmd[100];
 
-    printf( "Running Interactive\n");
-    int mum = 0;
+    fprintf(stderr, "Running Interactive\n");
 
     for (;;)
     {
         fflush(stdout);
 
-        if (!mum) printf( "Cmd: ");
+        if ( !mum ) fprintf( stderr, "Cmd: ");
+        fflush(stderr);
 
         fgets( cmd, 99, stdin);
 
@@ -2266,16 +2297,22 @@ static void runInteractiveLoop()
         if ( token == NULL )
             continue;
 
+        if (!strcmp(token,"mum"))
+        {
+            mum = 1;
+            printf( "=OK\n" );
+            continue;
+        }
+
         if (!strcmp(token,"quit"))
         {
             if ( running )
             {
-                running = 0;
-                pthread_join(runThread_id,NULL);
-                if (!mum) printf( "Stopped\n");
+                stop_flag = 1;
+                printf( "Stopped\n");
             }
 
-            if (!mum) printf( "Quit\n");
+            printf( "Quit\n");
             return;
         }
 
@@ -2297,11 +2334,14 @@ static void runInteractiveLoop()
             }
 
             frame_count = 0; // Run forever
+            stop_flag = 0;
 
             int rc = pthread_create(&runThread_id, NULL, &runThread, NULL);
+            rc = rc || pthread_detach(runThread_id);
             if (rc)
             {
                 fprintf(stderr, "Error creating runThread_id\n");
+                printf( "=No\n");
             } else {
                 printf( "=OK\n" );
             }
@@ -2314,8 +2354,7 @@ static void runInteractiveLoop()
                 continue;
             }
 
-            running = 0;
-            pthread_join(runThread_id,NULL);
+            stop_flag = 1;
             printf( "=OK\n");
         }
         else if (!strcmp(token,"compose"))
@@ -2329,7 +2368,14 @@ static void runInteractiveLoop()
             token = strtok(NULL," \n\t\r");
 
             int rc = pthread_create(&composeThread_id, NULL, &composeThread, token );
-            printf( "=OK\n");
+            rc = rc || pthread_detach(composeThread_id);
+            if ( rc != 0 )
+            {
+                fprintf(stderr, "Error creating composeThread_id\n");
+                printf( "=No\n");
+            } else {
+                printf( "=OK\n" );
+            }
         }
         else if (!strcmp(token,"average"))
         {
@@ -2342,7 +2388,14 @@ static void runInteractiveLoop()
             token = strtok(NULL," \n\t\r");
 
             int rc = pthread_create(&averageThread_id, NULL, &averageThread, token );
-            printf( "=OK\n");
+            rc = rc || pthread_detach(averageThread_id);
+            if ( rc != 0 )
+            {
+                fprintf(stderr, "Error creating averageThread_id\n");
+                printf( "=No\n");
+            } else {
+                printf( "=OK\n" );
+            }
         }
         else if (!strcmp(token,"mask"))
         {
@@ -2353,7 +2406,14 @@ static void runInteractiveLoop()
             }
 
             int rc = pthread_create(&maskThread_id, NULL, &maskThread, NULL );
-            printf( "=OK\n");
+            rc = rc || pthread_detach(maskThread_id);
+            if ( rc != 0 )
+            {
+                fprintf(stderr, "Error creating maskThread_id\n");
+                printf( "=No\n");
+            } else {
+                printf( "=OK\n" );
+            }
         }
         else if (!strcmp(token,"set_noise"))
         {
@@ -2410,10 +2470,6 @@ static void runInteractiveLoop()
             force_count = frame_number + 30;
             printf( "=OK\n" );
         }
-        else if (!strcmp(token,"mum"))
-        {
-            mum = !mum;
-        }
     }
 }
 
@@ -2431,12 +2487,13 @@ static void usage(FILE *fp, int argc, char **argv)
             "-f | --force         Force a trigger after [%d] frames\n"
             "-n | --noise         Noise level [%d]\n"
             "-i | --interactive   Run interactive\n"
+            "-s | --silent        Run silent interactive\n"
             "\n"
-            "Example usage: sentinel -j -d /dev/video0\n",
+            "Example usage: ./sentinel.bin -j -d /dev/video0\n",
             argv[0], dev_name, h264_name, h264_name, frame_count, force_count, noise_level);
 }
 
-static const char short_options[] = "d:jmc:f:n:i";
+static const char short_options[] = "d:jmc:f:n:is";
 
 static const struct option
     long_options[] = {
@@ -2448,6 +2505,7 @@ static const struct option
         {"force", required_argument, NULL, 'f'},
         {"noise", required_argument, NULL, 'n'},
         {"interactive", no_argument, NULL, 'i'},
+        {"silent", no_argument, NULL, 's'},
         {0, 0, 0, 0}};
 
 int main(int argc, char **argv)
@@ -2457,6 +2515,7 @@ int main(int argc, char **argv)
     int composeH264 = 0;
     int averageH264 = 0;
     int runInteractive = 0;
+    int silent = 0;
 
     dev_name = "/dev/video2";
     h264_name = "video.h264";
@@ -2518,6 +2577,11 @@ int main(int argc, char **argv)
             runInteractive = 1;
             break;
 
+        case 's':
+            runInteractive = 1;
+            silent = 1;
+            break;
+
         default:
             usage(stderr, argc, argv);
             exit(EXIT_FAILURE);
@@ -2528,8 +2592,9 @@ int main(int argc, char **argv)
     {
         bcm_host_init();
 
-        runInteractiveLoop();
+        runInteractiveLoop(silent);
 
+        sleep(5);
         return 0;
     }
 
@@ -2576,6 +2641,8 @@ int main(int argc, char **argv)
     }
 
     pthread_join(runThread_id,NULL);
+
+    fprintf(stderr,"After pthread_join\n");
 
     if (logfile != 0)
         fclose(logfile);

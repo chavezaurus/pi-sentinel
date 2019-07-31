@@ -143,7 +143,7 @@ class SentinelServer(object):
         return response
         
     def connectToSentinel(self):
-        self.sentinelProcess = Popen(['./sentinel.bin', '-i'], stdin=PIPE, stdout=PIPE, shell=False, universal_newlines=True)
+        self.sentinelProcess = Popen(['./sentinel.bin', '-s'], stdin=PIPE, stdout=PIPE, shell=False, universal_newlines=True)
         self.y = select.poll()
         self.y.register(self.sentinelProcess.stdout, select.POLLIN)
         self.background = Thread(target = self.backgroundProcess)
