@@ -43,29 +43,14 @@ let DoHeader = {
                 }}, "Controls"),
                 m(eventsClass, {onclick: function() {
                     showControls = false;
-                    RequestControls();
+                    if ( eventsShown !== "" ) {
+                        UpdateEvents(eventsShown);
+                    }
                 }}, "Events")
             ])
         ])
     }
 };
-
-/*
-let DoHeader = {
-    view: function() {
-        return m("div.header", [
-            m("h1", "Pi Sentinel"),
-            m("button.pure-button", 
-                {onclick: function(){
-                    showControls=!showControls;
-                    RequestControls();
-                }}, 
-                showControls ? "Show Event Tables" : "Show Controls Form")
-        ]);
-    }
-}
-*/
-
 
 let DoTable = {
     view: function() {
@@ -197,6 +182,11 @@ let Video = {
 };
 
 let Table = {
+    oncreate: function() { 
+        if ( eventsShown === "" ){
+            UpdateEvents("new")
+        }
+    },
     view: function() {
         let toTable = {
             "new":   "td.whiteCell",
@@ -268,8 +258,10 @@ let ToggleStartStop = function() {
         url: "toggle"
     })
     .then(function(result) {
-        if ( result.result != "OK") {
+        if ( result.response != "OK") {
             alert("Toggle failed");
+        } else {
+            setTimeout( RequestControls, 2000);
         }
     })
     .catch(function(e) {
@@ -283,8 +275,10 @@ let ForceTrigger = function() {
         url: "force_trigger"
     })
     .then(function(result) {
-        if ( result.result != "OK") {
+        if ( result.response != "OK") {
             alert("Force Trigger failed");
+        } else {
+            setTimeout( RequestControls, 7000 );
         }
     })
     .catch(function(e) {

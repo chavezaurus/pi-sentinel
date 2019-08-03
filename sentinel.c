@@ -482,21 +482,21 @@ static void init_device(int jpeg)
 
     fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 
-    fmt.fmt.pix.width = 1920;
-    fmt.fmt.pix.height = 1080;
-    fmt.fmt.pix.pixelformat = jpeg ? V4L2_PIX_FMT_MJPEG : V4L2_PIX_FMT_H264;
-    fmt.fmt.pix.field = V4L2_FIELD_NONE;
+    if (-1 == xioctl(fd, VIDIOC_G_FMT, &fmt))
+        errno_exit("VIDIOC_G_FMT");
 
-    if (-1 == xioctl(fd, VIDIOC_S_FMT, &fmt))
-        errno_exit("VIDIOC_S_FMT");
+    if ( fmt.fmt.pix.width != 1920 ||
+         fmt.fmt.pix.height != 1080 ||
+         fmt.fmt.pix.pixelformat != jpeg ? V4L2_PIX_FMT_MJPEG : V4L2_PIX_FMT_H264 )
+    {
+        fmt.fmt.pix.width = 1920;
+        fmt.fmt.pix.height = 1080;
+        fmt.fmt.pix.pixelformat = jpeg ? V4L2_PIX_FMT_MJPEG : V4L2_PIX_FMT_H264;
+        fmt.fmt.pix.field = V4L2_FIELD_NONE;
 
-    /* Buggy driver paranoia. */
-    min = fmt.fmt.pix.width * 2;
-    if (fmt.fmt.pix.bytesperline < min)
-        fmt.fmt.pix.bytesperline = min;
-    min = fmt.fmt.pix.bytesperline * fmt.fmt.pix.height;
-    if (fmt.fmt.pix.sizeimage < min)
-        fmt.fmt.pix.sizeimage = min;
+        if (-1 == xioctl(fd, VIDIOC_S_FMT, &fmt))
+            errno_exit("VIDIOC_S_FMT");
+    }
 
     init_mmap();
 }
@@ -548,13 +548,11 @@ EventHandler(OMX_OUT OMX_HANDLETYPE hComponent,
     if ( eEvent == OMX_EventPortSettingsChanged )
     {
         fprintf(stderr, "Port Settings Changed\n");
-        fflush(stdout);
         portSettingsChanged = 1;
     } 
     else 
     {
         fprintf(stderr, "EventHandler %d %x\n", eEvent, Data1);
-        fflush(stdout);
     }
     return OMX_ErrorNone;
 }
@@ -573,7 +571,6 @@ static void keepFrames(const unsigned char *p, int size, unsigned int timeStamp_
         frameAlloc[nextFrameIndex] = alloc_size;
     }
 
-    frameBuffers[nextFrameIndex] = (unsigned char *)realloc(frameBuffers[nextFrameIndex], size);
     frameSizes[nextFrameIndex] = size;
     frameTimestamps[nextFrameIndex] = timeStamp_lo;
 
@@ -1673,7 +1670,6 @@ static void uninit_sentinel(void)
     // fprintf(stderr, "Free maskFrame\n");
     free(maskFrame);
 
-    fprintf(stderr, "Free frameBuffers\n");
     for ( int i = 0; i < FRAMES_TO_KEEP; ++i )
     {
         free(frameBuffers[i]);
@@ -1702,6 +1698,11 @@ static void uninit_decoder(void)
     if (error != OMX_ErrorNone)
         omx_die( error, "Could not disable port 131");
 
+    error = OMX_FreeBuffer(decoderHandle, 130, decoderBuffer);
+    if (error != OMX_ErrorNone)
+        omx_die( error, "Could not free decoder buffer");
+    decoderBuffer = 0;
+
     error = OMX_FreeBuffer(decoderHandle, 131, pongBuffer);
     if (error != OMX_ErrorNone)
         omx_die( error, "Could not free pong buffer");
@@ -1711,11 +1712,6 @@ static void uninit_decoder(void)
     if (error != OMX_ErrorNone)
         omx_die( error, "Could not free ping buffer");
     pingBuffer = 0;
-
-    error = OMX_FreeBuffer(decoderHandle, 130, decoderBuffer);
-    if (error != OMX_ErrorNone)
-        omx_die( error, "Could not free decoder buffer");
-    decoderBuffer = 0;
 
     error = OMX_FreeHandle(decoderHandle);
     if (error != OMX_ErrorNone)
@@ -2289,7 +2285,6 @@ static void runInteractiveLoop( int mum )
         fflush(stdout);
 
         if ( !mum ) fprintf( stderr, "Cmd: ");
-        fflush(stderr);
 
         fgets( cmd, 99, stdin);
 
@@ -2510,6 +2505,8 @@ static const struct option
 
 int main(int argc, char **argv)
 {
+    // mtrace();
+
     int getJpeg = 0;
     int getMpeg = 0;
     int composeH264 = 0;
@@ -2642,10 +2639,10 @@ int main(int argc, char **argv)
 
     pthread_join(runThread_id,NULL);
 
-    fprintf(stderr,"After pthread_join\n");
-
     if (logfile != 0)
         fclose(logfile);
+
+    // muntrace();
 
     return 0;
 }

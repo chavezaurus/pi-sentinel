@@ -151,6 +151,35 @@ class SentinelServer(object):
         self.comm = Thread(target = self.commProcess)
         self.comm.start()
 
+    def testThread(self):
+        for i in range(20):
+            time.sleep(69)
+            response = self.funnelCmd("start")
+            if response["response"] != "OK":
+                print("Start failed")
+                return
+
+            time.sleep(61)
+            self.funnelCmd("force_trigger")
+            if response["response"] != "OK":
+                print("Force Trigger failed")
+                return
+
+            time.sleep(53)
+            response = self.funnelCmd("stop")
+            if response["response"] != "OK":
+                print("Stop failed")
+                return
+
+        print("End of Test")
+
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
+    def test(self):
+        self.test = Thread(target = self.testThread)
+        self.test.start();
+        return { "response": "OK" }
+
     @cherrypy.expose
     def index(self):
         return open('public/index.html')
@@ -257,6 +286,7 @@ class SentinelServer(object):
 
     @cherrypy.expose
     @cherrypy.tools.json_in()
+    @cherrypy.tools.json_out()
     def set_state(self):
         print("set_state")
         data = cherrypy.request.json
@@ -296,17 +326,25 @@ class SentinelServer(object):
         return r
 
     @cherrypy.expose
+    @cherrypy.tools.json_out()
     def toggle(self):
         self.toggleStartStop()
         return { "response": "OK"}
 
     @cherrypy.expose
+    @cherrypy.tools.json_out()
     def force_trigger(self):
         r = self.funnelCmd("get_running")
         if r["response"] != "Yes":
             return { "response": "No"}
 
         return self.funnelCmd("force_trigger")
+
+    @cherrypy.expose
+    def shutdown(self):
+        self.funnelCmd("quit")
+        time.sleep(2)
+        cherrypy.engine.exit()
 
 conf =  { 
             '/': {
