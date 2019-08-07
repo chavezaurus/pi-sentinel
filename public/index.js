@@ -5,10 +5,32 @@ var tableItems = [];
 var selectedRow = null;
 var showControls = false;
 var showComposite = false;
+var showDropdown = false;
 
 var eventsShown = "";
 
 var eventTimeString = "";
+
+var sentinelState = {
+    startTime: { h: 21, m:  0 },
+    stopTime: { h: 5, m: 30 },
+    noiseThreshold: 40,
+    sumThreshold: 175,
+    eventsPerHour: 5,
+    frameRate: 30.0,
+    zenithAmplitude: 0.0,
+    running: "No",
+    numNew: 0,
+    numSaved: 0,
+    numTrashed: 0
+};
+
+var videoSource = null;
+var videoPoster = null;
+
+let basename = function(path) {
+    return path.replace(/.*\//, '');
+};
 
 let UpdateEvents = function(fromDir) {
     m.request({
@@ -29,6 +51,37 @@ let UpdateEvents = function(fromDir) {
     })
 };
 
+let Dropdown = {
+    view: function() {
+        let c = showDropdown ? "div.dropdown-content.show" : "div.dropdown-content";
+        let running = sentinelState.running === 'Yes';
+
+        let forceClass = running ? "a.dropdown-item" : "a.dropdown-none";
+        let compoClass = running ? "a.dropdown-none" : "a.dropdown-item";
+
+        let vidObj = videoSource !== null ? {href: videoSource, download: basename(videoSource)} : {href: "#"};
+        let jpgObj = videoPoster !== null ? {href: videoPoster, download: basename(videoPoster)} : {href: "#"};
+
+
+        return m("div.dropdown", [
+            m("button.pure-button", {id: "mydrop", onclick: function(){showDropdown=!showDropdown;}}, "Actions"),
+            m(c, [
+                m("a.dropdown-item", {href: "#", onclick: ToggleStartStop }, "Toggle Start/Stop"),
+                m(forceClass, {href: "#", onclick: ForceTrigger }, "Force Trigger"),
+                m(compoClass, {href: "#", onclick: MakeComposite }, "Make Composite"),
+                m("a.dropdown-item", vidObj, "Get Video"),
+                m("a.dropdown-item", jpgObj, "Get Composite")
+            ])
+        ])
+    }
+};
+
+let CheckDropdown = function(e) {
+    if ( !e.target.matches('#mydrop') ) {
+        showDropdown = false;
+    }
+};
+
 let DoHeader = {
     view: function() {
         let eventsClass   =  showControls ? "button.pure-button" : "button.pure-button.bselect";
@@ -47,7 +100,8 @@ let DoHeader = {
                         UpdateEvents(eventsShown);
                     }
                 }}, "Events")
-            ])
+            ]),
+            m(Dropdown)       
         ])
     }
 };
@@ -65,9 +119,6 @@ let DoTable = {
         ])
     }
 };
-
-var videoSource = null;
-var videoPoster = null;
 
 let CheckForPoster = function( path ) {
     m.request({
@@ -87,7 +138,13 @@ let CheckForPoster = function( path ) {
     })
 };
 
-let MakeComposite = function( path ) {
+let MakeComposite = function() {
+    if ( videoSource === null ) {
+        alert("No video file selected");
+    }
+
+    let path = videoSource.replace(".mp4", ".h264");
+
     m.request({
         method: "POST",
         url: "compose",
@@ -136,8 +193,6 @@ let ClickTable = function(e) {
         }
         if ( posterTest === videoPoster ) {
             showComposite = !showComposite;
-        } else if ( e.altKey ) {
-            MakeComposite( videoSource.replace(".mp4",".h264"));
         } else {
             showComposite = false;
             CheckForPoster( posterTest );
@@ -206,20 +261,6 @@ let Table = {
         ]
         );
     }
-};
-
-var sentinelState = {
-    startTime: { h: 21, m:  0 },
-    stopTime: { h: 5, m: 30 },
-    noiseThreshold: 40,
-    sumThreshold: 175,
-    eventsPerHour: 5,
-    frameRate: 30.0,
-    zenithAmplitude: 0.0,
-    running: "No",
-    numNew: 0,
-    numSaved: 0,
-    numTrashed: 0
 };
 
 let SubmitControls = function() {
@@ -326,8 +367,6 @@ let TimerPickers = {
 let ControlStuff = {
     view: function() {
         return m("div.form-container", [
-            m("button.pure-button", {onclick: ToggleStartStop}, "Toggle Start/Stop"),
-            m("button.pure-button", {onclick: ForceTrigger},    "Force Trigger"),
             m("button.pure-button", {onclick: RequestControls}, "Request Update"),
             m(TimerPickers)
         ]);
@@ -337,14 +376,14 @@ let ControlStuff = {
 let Layout = {
     view: function() {
         if ( showControls ) {
-            return m("div.grid-container", [
+            return m("div.grid-container", {onclick: CheckDropdown}, [
                 m(DoHeader),
                 m("div.content",  m(Video)),
                 m("div.footer",   eventTimeString),
                 m("div.controls", m(ControlStuff))
             ]);
         } else {
-            return m("div.grid-container", [
+            return m("div.grid-container", {onclick: CheckDropdown}, [
                 m(DoHeader),
                 m("div.content",  m(Video)),
                 m("div.footer",   eventTimeString),
