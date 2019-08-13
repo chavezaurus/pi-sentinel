@@ -7,10 +7,7 @@ table {
     background: rgb(61, 79, 93);
     text-align: center;
     padding: 20px 0;
-}
-
-.header h1 {
-    color: wheat;
+    align-items: center;
 }
 
 .controls {
@@ -122,6 +119,52 @@ table {
     grid-column: 1 / 3;
 }
 
+.header-container {
+    grid-area: xheader;
+    display: grid;
+    grid-row-gap: 1rem;
+    grid-template-columns: 97px 97px 97px;
+    align-items: center;
+    text-align: center;
+    justify-self: center;
+}
+
+.header-item {
+    justify-self: center;
+}
+
+.header-label {
+    color: wheat;
+    justify-self: center;
+    grid-column: 1 / 4;
+}
+
+.playback-container {
+    display: grid;
+    grid-row-gap: 1rem;
+    grid-column-gap: 0rem;
+    grid-template-columns: auto auto auto;
+    align-items: center;
+}
+
+.pbitem {
+    width: 90px;
+    justify-self: center;
+    text-align: center;
+    color: black;
+}
+
+.pblabel {
+    width: 90px;
+    justify-self: start;
+    text-align: center;
+    color: white;
+}
+
+.pbsubmit {
+    grid-column: 1 / 4;
+}
+
 .input {
     justify-self: start;
     width: 110px;
@@ -149,6 +192,7 @@ table {
     font-size: 16px;
     border: none;
     cursor: pointer;
+    width: auto;
   }
   
   .dropbtn:hover, .dropbtn:focus {
@@ -156,9 +200,10 @@ table {
   }
   
   .dropdown {
-    position: relative;
     display: inline-block;
-  }
+    grid-column: 2 / 4;
+    justify-self: start;
+}
   
   .dropdown-content {
     display: none;

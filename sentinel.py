@@ -17,6 +17,8 @@ class SentinelServer(object):
         self.cmdQueue = Queue()
         self.startTime = "21:30"
         self.stopTime  = "05:00"
+        self.devName = "/dev/video2"
+        self.archivePath = "none"
 
         if not os.path.exists("new"):
             os.mkdir("new")
@@ -61,13 +63,13 @@ class SentinelServer(object):
 
         response = self.funnelCmd("get_frame_rate")
         if float(response["response"]) < 19.0:
-            run(['v4l2-ctl', '-d', '/dev/video2', '-c', 'exposure_auto=1'])
-            run(['v4l2-ctl', '-d', '/dev/video2', '-c', 'exposure_absolute=333'])
+            run(['v4l2-ctl', '-d', self.devName, '-c', 'exposure_auto=1'])
+            run(['v4l2-ctl', '-d', self.devName, '-c', 'exposure_absolute=333'])
             return
 
         response = self.funnelCmd("get_zenith_amplitude")
         if float(response["response"]) > 230.0:
-            run(['v4l2-ctl', '-d', '/dev/video2', '-c', 'exposure_auto=3'])
+            run(['v4l2-ctl', '-d', self.devName, '-c', 'exposure_auto=3'])
 
     def handleSentinelCommand(self,obj):
         cmd = obj['cmd']+"\n"
@@ -106,9 +108,9 @@ class SentinelServer(object):
             #Check for timed actions
             tnow = time.strftime('%H:%M')
             if tnow != lastTime:
-                if tnow == self.startTime:
+                if tnow == self.startTime and self.startTime != self.stopTime:
                     self.runStartSequence()
-                elif tnow == self.stopTime:
+                elif tnow == self.stopTime and self.startTime != self.stopTime:
                     self.runStopSequence()
                 else:
                     self.checkExposure()
@@ -273,11 +275,16 @@ class SentinelServer(object):
             response["eventsPerHour"] = int(r["response"])
             r = self.funnelCmd("get_running")
             response["running"] = r["response"]
+            r = self.funnelCmd("get_dev_name")
+            response["devName"] = r["response"]
+            r = self.funnelCmd("get_archive_path")
+            response["archivePath"] = r["response"]
             response["startTime"] = {"h": int(self.startTime[0:2]), "m": int(self.startTime[3:5])}
             response["stopTime"]  = {"h": int(self.stopTime[0:2]),  "m": int(self.stopTime[3:5])}
             response["numNew"]     = len(glob.glob("new/*.mp4"))
             response["numSaved"]   = len(glob.glob("saved/*.mp4"))
             response["numTrashed"] = len(glob.glob("trash/*.mp4"))
+            self.devName = response["devName"]
         except Exception as inst:
             print(inst)
             return {}
@@ -299,10 +306,18 @@ class SentinelServer(object):
         r = self.funnelCmd("set_max_events_per_hour %d" % data["eventsPerHour"])
         if r["response"] != "OK":
             return r
+        r = self.funnelCmd("set_dev_name %s" % data["devName"])
+        if r["response"] != "OK":
+            return r
+        r = self.funnelCmd("set_archive_path %s" % data["archivePath"])
+        if r["response"] != "OK":
+            return r
         start = data["startTime"]
         stop = data["stopTime"]
         self.startTime = "%02d:%02d" % (start["h"],start["m"])
         self.stopTime  = "%02d:%02d" % (stop["h"], stop["m"])
+        self.devName = data["devName"]
+        self.archivePath = data["archivePath"]
 
         return { "response": "OK" }
 

@@ -60,7 +60,8 @@ static OMX_BUFFERHEADERTYPE *jpegBuffers[3];
 
 static char *composeBuffer;
 static int  *averageBuffer;
-static char *dev_name;
+static char dev_name[20];
+static char archive_path[255];
 static char *h264_name;
 static int fd = -1;
 struct buffer buffers[10];
@@ -104,6 +105,7 @@ static unsigned int eventTimeStamp_lo;
 static int rateLimitLastSecond;
 static int rateLimitBank;
 static int rateLimitEventsPerHour = 5;
+static int save_archive = 0;
 
 static double frameRate = 30.0;
 static double zenithAmplitude = 0.0;
@@ -111,6 +113,8 @@ static double zenithAmplitude = 0.0;
 static FILE *videoFile;
 static FILE *textFile;
 static FILE *logfile = 0;
+static FILE *videoArchive = 0;
+static FILE *textArchive = 0;
 
 static pthread_mutex_t saveEventThreadMutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t saveEventThreadCondition = PTHREAD_COND_INITIALIZER;
@@ -579,6 +583,82 @@ static void keepFrames(const unsigned char *p, int size, unsigned int timeStamp_
     nextFrameIndex = (nextFrameIndex + 1) % FRAMES_TO_KEEP;
 }
 
+static void archiveFrame( const unsigned char* p, int size, unsigned int timeStamp_hi, unsigned int timeStamp_lo )
+{
+    static unsigned int oldMinute = 0;
+    static double epochTimeShift = 0;
+
+    char videoPath[255];
+    char textPath[255];
+    char folderPath[255];
+
+    if ( videoArchive == 0 )
+        epochTimeShift = getEpochTimeShift();
+
+    double timelong = timeStamp_hi * 4294.967296 + 1.0e-6 * timeStamp_lo + epochTimeShift;
+    int minute = timelong / 60.0;
+
+    if ( minute != oldMinute )
+    {
+        if ( videoArchive != 0 )
+            fclose( videoArchive );
+        if ( textArchive != 0 )
+            fclose( textArchive );
+
+        videoArchive = 0;
+        textArchive = 0;
+
+        oldMinute = minute;
+    }
+
+    if ( videoArchive == 0 )
+    {
+        int hour = minute / 60;
+
+        sprintf( folderPath, "%s/s%d", archive_path, hour );
+        int e = mkdir(folderPath, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
+
+        if ( e == -1 && errno != EEXIST )
+            goto abort_archive;
+
+        sprintf( videoPath, "%s/s%d.h264", folderPath, minute );
+        sprintf( textPath,  "%s/s%d.txt",  folderPath, minute );
+
+        videoArchive = fopen( videoPath, "wb" );
+        if ( videoArchive == 0 )
+            goto abort_archive;
+
+        textArchive = fopen( textPath, "w" );
+        if ( textArchive == 0 )
+            goto abort_archive;
+
+        epochTimeShift = getEpochTimeShift();
+    }
+
+    int count = fwrite( p, size, 1, videoArchive );
+    if ( count != 1 )
+        goto abort_archive;
+
+    count = fprintf( textArchive, "%12.3f %6d\n", timelong, size );
+    if ( count == 0 )
+        goto abort_archive;
+
+    return;
+
+abort_archive:
+
+    fprintf( stderr, "Archive aborted\n" );
+    
+    if ( videoArchive )
+        fclose( videoArchive );
+    if ( textArchive )
+        fclose( textArchive );
+    videoArchive = 0;
+    textArchive = 0;
+
+    save_archive = 0;
+}
+
 static int decode_frame(void)
 {
     static int count = 0;
@@ -619,6 +699,9 @@ static int decode_frame(void)
     unsigned int timeStamp_lo = fmod(timeStampSec, 4294.967296) * 1.0e6;
 
     keepFrames(buffers[buf.index].start, buf.bytesused, timeStamp_lo);
+    if ( save_archive )
+        archiveFrame( buffers[buf.index].start, buf.bytesused, timeStamp_hi, timeStamp_lo );
+
     if (buf.bytesused > decoderBuffer->nAllocLen)
     {
         fprintf(stderr, "Input frame too big: %d\n", buf.bytesused);
@@ -693,19 +776,20 @@ static void saveEventJob(void)
 
     double timelong = arg.eventStartTimeHi * 4294.967296 + 1.0e-6 * arg.eventStartTimeLo + getEpochTimeShift();
     time_t unixTime = timelong;
+    int milli = 1000 * (timelong-unixTime);
 
     ptm = gmtime(&unixTime);
-    sprintf(nameVideoFile, "new/s%04d%02d%02d_%02d%02d%02d.h264",
+    sprintf(nameVideoFile, "new/s%04d%02d%02d_%02d%02d%02d_%03d.h264",
             ptm->tm_year + 1900, ptm->tm_mon + 1, ptm->tm_mday,
-            ptm->tm_hour, ptm->tm_min, ptm->tm_sec);
+            ptm->tm_hour, ptm->tm_min, ptm->tm_sec, milli);
 
     FILE *videoFile = fopen(nameVideoFile, "w");
     if (videoFile == 0)
         return;
 
-    sprintf(nameTextFile, "new/s%04d%02d%02d_%02d%02d%02d.txt",
+    sprintf(nameTextFile, "new/s%04d%02d%02d_%02d%02d%02d_%03d.txt",
             ptm->tm_year + 1900, ptm->tm_mon + 1, ptm->tm_mday,
-            ptm->tm_hour, ptm->tm_min, ptm->tm_sec);
+            ptm->tm_hour, ptm->tm_min, ptm->tm_sec, milli);
 
     FILE *textFile = fopen(nameTextFile, "w");
     if (textFile == 0)
@@ -750,9 +834,9 @@ static void saveEventJob(void)
     if (pstr == 0)
         return;
 
-    fprintf(stderr, "Event: %04d/%02d/%02d %02d:%02d:%02d\n",
+    fprintf(stderr, "Event: %04d/%02d/%02d %02d:%02d:%02d.%03d\n",
            ptm->tm_year + 1900, ptm->tm_mon + 1, ptm->tm_mday,
-           ptm->tm_hour, ptm->tm_min, ptm->tm_sec);
+           ptm->tm_hour, ptm->tm_min, ptm->tm_sec, milli);
 
     strcpy(pstr, "mp4");
 
@@ -1639,6 +1723,8 @@ static void init_sentinel(void)
 
     thread_exit = 0;
 
+    save_archive = strcmp( archive_path, "none" );
+
     int rc = pthread_create(&saveEventThread_id, NULL, &saveEventThread, NULL);
     if (rc)
     {
@@ -1679,6 +1765,18 @@ static void uninit_sentinel(void)
     testFrame = 0;
     referenceFrame = 0;
     maskFrame = 0;
+
+    if ( videoArchive != 0 )
+    {
+        fclose(videoArchive);
+        videoArchive = 0;
+    }
+
+    if ( textArchive != 0 )
+    {
+        fclose(textArchive);
+        textArchive = 0;
+    }
 }
 
 static void uninit_decoder(void)
@@ -2438,6 +2536,26 @@ static void runInteractiveLoop( int mum )
         {
             printf( "=%d\n", sumThreshold);
         }
+        else if (!strcmp(token,"set_dev_name"))
+        {
+            token = strtok(NULL," \n\t\r");
+            strcpy(dev_name, token);
+            printf( "=OK\n");
+        }
+        else if (!strcmp(token,"get_dev_name"))
+        {
+            printf( "=%s\n", dev_name );
+        }
+        else if (!strcmp(token,"set_archive_path"))
+        {
+            token = strtok(NULL," \n\t\r");
+            strcpy(archive_path, token);
+            printf( "=OK\n");
+        }
+        else if (!strcmp(token,"get_archive_path"))
+        {
+            printf( "=%s\n", archive_path );
+        }
         else if (!strcmp(token,"set_max_events_per_hour"))
         {
             token = strtok(NULL," \n\t\r");
@@ -2514,7 +2632,8 @@ int main(int argc, char **argv)
     int runInteractive = 0;
     int silent = 0;
 
-    dev_name = "/dev/video2";
+    strcpy(dev_name,"/dev/video2");
+    strcpy( archive_path, "none");
     h264_name = "video.h264";
 
     for (;;)
@@ -2534,7 +2653,7 @@ int main(int argc, char **argv)
             break;
 
         case 'd':
-            dev_name = optarg;
+            strcpy(dev_name,optarg);
             break;
 
         case 'h':
@@ -2542,12 +2661,12 @@ int main(int argc, char **argv)
             exit(EXIT_SUCCESS);
 
         case 'j':
-            dev_name = "/dev/video0";
+            strcpy(dev_name, "/dev/video0");
             getJpeg = 1;
             break;
 
         case 'm':
-            dev_name = "/dev/video0";
+            strcpy(dev_name, "/dev/video0");
             getMpeg = 1;
             break;
 

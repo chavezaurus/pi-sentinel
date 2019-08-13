@@ -3,7 +3,7 @@ var root = document.body;
 var tableItems = [];
 
 var selectedRow = null;
-var showControls = false;
+var paneSelect = "events";
 var showComposite = false;
 var showDropdown = false;
 
@@ -20,9 +20,21 @@ var sentinelState = {
     frameRate: 30.0,
     zenithAmplitude: 0.0,
     running: "No",
+    devName: "/dev/video2",
+    archivePath: "none",
     numNew: 0,
     numSaved: 0,
     numTrashed: 0
+};
+
+var playbackState = {
+    year: 2019,
+    month: 4,
+    day: 1,
+    hour: 12,
+    minute: 0,
+    second: 0,
+    duration: 3
 };
 
 var videoSource = null;
@@ -84,24 +96,26 @@ let CheckDropdown = function(e) {
 
 let DoHeader = {
     view: function() {
-        let eventsClass   =  showControls ? "button.pure-button" : "button.pure-button.bselect";
-        let controlsClass = (!showControls) ? "button.pure-button" : "button.pure-button.bselect";
+        let eventsClass   =  paneSelect === "events"   ? "button.pure-button.bselect" : "button.pure-button";
+        let controlsClass =  paneSelect === "controls" ? "button.pure-button.bselect" : "button.pure-button";
+        let playbackClass =  paneSelect === "playback" ? "button.pure-button.bselect" : "button.pure-button";
 
-        return m("div.header", [
-            m("h1", "Pi Sentinel"),
-            m("pure-button-group", {role: "group", "aria-label": "Controls or Events Page"}, [
-                m(controlsClass, {onclick: function() {
-                    showControls = true;
-                    RequestControls();
-                }}, "Controls"),
-                m(eventsClass, {onclick: function() {
-                    showControls = false;
-                    if ( eventsShown !== "" ) {
-                        UpdateEvents(eventsShown);
-                    }
-                }}, "Events")
-            ]),
-            m(Dropdown)       
+        return m("div.header-container", [
+            m("h1.header-label", "Pi Sentinel"),
+            m(Dropdown),    
+            m(controlsClass, {onclick: function() {
+                paneSelect = "controls";
+                RequestControls();
+            }}, "Controls"),
+            m(eventsClass, {onclick: function() {
+                paneSelect = "events";
+                if ( eventsShown !== "" ) {
+                    UpdateEvents(eventsShown);
+                }
+            }}, "Events"),
+            m(playbackClass, {onclick: function() {
+                paneSelect = "playback";
+            }}, "Playback")
         ])
     }
 };
@@ -264,13 +278,21 @@ let Table = {
 };
 
 let SubmitControls = function() {
+    if ( sentinelState.archivePath === "" ) {
+        sentinelState.archivePath = "/dev/video2";
+    }
+
+    if ( sentinelState.devName === "" ) {
+        sentinelState.devName = "none";
+    }
+
     m.request({
         method: "POST",
         url: "set_state",
         body: sentinelState
     })
     .then(function(result) {
-        if ( result.result != "OK") {
+        if ( result.response != "OK") {
             alert("Submit failed");
         }
     })
@@ -327,7 +349,29 @@ let ForceTrigger = function() {
     })
 };
 
-let TimerPickers = {
+let SubmitPlayback
+
+let PlaybackPane = {
+    view: function() {
+        return m("form.playback-container", {
+            onsubmit: function(e) {e.preventDefault(), SubmitPlayback() }
+        }, [
+            m("input.pbitem[type=number]",{oninput:function(e){playbackState.year=Number(e.target.value)},value: playbackState.year}),
+            m("input.pbitem[type=number]",{oninput:function(e){playbackState.month=Number(e.target.value)},value: playbackState.month}),
+            m("input.pbitem[type=number]",{oninput:function(e){playbackState.day=Number(e.target.value)},value: playbackState.day}),
+            m("label.pblabel", "Year"), m("label.pblabel", "Month"), m("label.pblabel", "Day"),
+            m("input.pbitem[type=number]",{oninput:function(e){playbackState.hour=Number(e.target.value)},value: playbackState.hour}),
+            m("input.pbitem[type=number]",{oninput:function(e){playbackState.minute=Number(e.target.value)},value: playbackState.minute}),
+            m("input.pbitem[type=number]",{oninput:function(e){playbackState.second=Number(e.target.value)},value: playbackState.second}),
+            m("label.pblabel", "Hour"), m("label.pblabel", "Minute"), m("label.pblabel", "Second"),
+            m("label.pblabel", ""), m("label.pblabel", "Duration:"),
+            m("input.pbitem[type=number]",{oninput:function(e){playbackState.duration=Number(e.target.value)},value: playbackState.duration}),
+            m("button.pure-button.pbsubmit[type=submit]", "Submit")
+        ])
+    }
+};
+
+let ControlPane = {
     view: function() {
         return m("form.control-container",{
                 onsubmit: function(e) { e.preventDefault(), SubmitControls() }
@@ -359,7 +403,13 @@ let TimerPickers = {
             m("label.citem-left", "Max Events Per Hour:"),
             m("input.input[type=number]",{oninput:function(e){sentinelState.eventsPerHour=Number(e.target.value)},value: sentinelState.eventsPerHour}),
 
-            m("button.pure-button.citem-submit.[type=submit]", "Submit")
+            m("label.citem-left", "Camera Device:"),
+            m("input.input[type=text]",{oninput:function(e){sentinelState.devName=e.target.value},value: sentinelState.devName}),
+
+            m("label.citem-left", "Archive Path:"),
+            m("input.input[type=text]",{oninput:function(e){sentinelState.archivePath=e.target.value},value: sentinelState.archivePath}),
+
+            m("button.pure-button.citem-submit[type=submit]", "Submit")
         ]);
     }
 };
@@ -368,27 +418,34 @@ let ControlStuff = {
     view: function() {
         return m("div.form-container", [
             m("button.pure-button", {onclick: RequestControls}, "Request Update"),
-            m(TimerPickers)
+            m(ControlPane)
         ]);
     }
 };
 
 let Layout = {
     view: function() {
-        if ( showControls ) {
+        if ( paneSelect === "controls" ) {
             return m("div.grid-container", {onclick: CheckDropdown}, [
                 m(DoHeader),
                 m("div.content",  m(Video)),
                 m("div.footer",   eventTimeString),
                 m("div.controls", m(ControlStuff))
             ]);
-        } else {
+        } else if ( paneSelect === "events" ) {
             return m("div.grid-container", {onclick: CheckDropdown}, [
                 m(DoHeader),
                 m("div.content",  m(Video)),
                 m("div.footer",   eventTimeString),
                 m("div.controls", m(DoTable)),
                 m("div.stable",   m(Table))
+            ]);
+        } else if ( paneSelect === "playback" ) {
+            return m("div.grid-container", {onclick: CheckDropdown}, [
+                m(DoHeader),
+                m("div.content",  m(Video)),
+                m("div.footer",   eventTimeString),
+                m("div.controls", m(PlaybackPane))
             ]);
         }
     }
