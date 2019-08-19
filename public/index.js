@@ -349,7 +349,22 @@ let ForceTrigger = function() {
     })
 };
 
-let SubmitPlayback
+let SubmitPlayback = function()
+{
+    m.request({
+        method: "POST",
+        url: "playback",
+        body: playbackState
+    })
+    .then(function(result) {
+        if ( result.response != "OK") {
+            alert(result.response);
+        }
+    })
+    .catch(function(e) {
+        console.log( e.code );
+    })
+};
 
 let PlaybackPane = {
     view: function() {

@@ -80,8 +80,10 @@ static unsigned char *maskFrame = 0;
 static unsigned char *frameBuffers[FRAMES_TO_KEEP];
 static int frameAlloc[FRAMES_TO_KEEP];
 static int frameSizes[FRAMES_TO_KEEP];
-static int frameTimestamps[FRAMES_TO_KEEP];
+static int frameTimestampLo[FRAMES_TO_KEEP];
+static int frameTimestampHi[FRAMES_TO_KEEP];
 static int nextFrameIndex;
+static int archiveFrameIndex;
 static int eventFrameIndex;
 static int eventFrameStop;
 
@@ -105,7 +107,6 @@ static unsigned int eventTimeStamp_lo;
 static int rateLimitLastSecond;
 static int rateLimitBank;
 static int rateLimitEventsPerHour = 5;
-static int save_archive = 0;
 
 static double frameRate = 30.0;
 static double zenithAmplitude = 0.0;
@@ -129,6 +130,7 @@ static pthread_cond_t composeBufferThreadCondition = PTHREAD_COND_INITIALIZER;
 static pthread_t composeThread_id;
 static pthread_t averageThread_id;
 static pthread_t maskThread_id;
+static pthread_t archiveThread_id;
 
 static pthread_t runThread_id;
 
@@ -561,7 +563,7 @@ EventHandler(OMX_OUT OMX_HANDLETYPE hComponent,
     return OMX_ErrorNone;
 }
 
-static void keepFrames(const unsigned char *p, int size, unsigned int timeStamp_lo)
+static void keepFrames(const unsigned char *p, int size, unsigned int timeStamp_hi, unsigned int timeStamp_lo)
 {
     static int alloc_size = 8192;
 
@@ -576,17 +578,23 @@ static void keepFrames(const unsigned char *p, int size, unsigned int timeStamp_
     }
 
     frameSizes[nextFrameIndex] = size;
-    frameTimestamps[nextFrameIndex] = timeStamp_lo;
+    frameTimestampLo[nextFrameIndex] = timeStamp_lo;
+    frameTimestampHi[nextFrameIndex] = timeStamp_hi;
 
     memcpy(frameBuffers[nextFrameIndex], p, size);
 
     nextFrameIndex = (nextFrameIndex + 1) % FRAMES_TO_KEEP;
 }
 
-static void archiveFrame( const unsigned char* p, int size, unsigned int timeStamp_hi, unsigned int timeStamp_lo )
+static int archiveFrame( void )
 {
     static unsigned int oldMinute = 0;
     static double epochTimeShift = 0;
+
+    const unsigned char* p = frameBuffers[archiveFrameIndex];
+    int size = frameSizes[archiveFrameIndex];
+    unsigned int timeStamp_hi = frameTimestampHi[archiveFrameIndex];
+    unsigned int timeStamp_lo = frameTimestampLo[archiveFrameIndex];
 
     char videoPath[255];
     char textPath[255];
@@ -619,44 +627,69 @@ static void archiveFrame( const unsigned char* p, int size, unsigned int timeSta
         int e = mkdir(folderPath, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
 
         if ( e == -1 && errno != EEXIST )
-            goto abort_archive;
+            return -1;
 
         sprintf( videoPath, "%s/s%d.h264", folderPath, minute );
         sprintf( textPath,  "%s/s%d.txt",  folderPath, minute );
 
         videoArchive = fopen( videoPath, "wb" );
         if ( videoArchive == 0 )
-            goto abort_archive;
+            return -1;
 
         textArchive = fopen( textPath, "w" );
         if ( textArchive == 0 )
-            goto abort_archive;
+            return -1;
 
         epochTimeShift = getEpochTimeShift();
     }
 
     int count = fwrite( p, size, 1, videoArchive );
     if ( count != 1 )
-        goto abort_archive;
+        return -1;
 
     count = fprintf( textArchive, "%12.3f %6d\n", timelong, size );
     if ( count == 0 )
-        goto abort_archive;
+        return -1;
 
-    return;
+    return 0;
+}
 
-abort_archive:
+static void *archiveThread(void *argin)
+{
+    if ( !strcmp(archive_path, "none" ) )
+        return 0;
 
-    fprintf( stderr, "Archive aborted\n" );
-    
+    int archiving = 1;
+
+    while (archiving)
+    {
+        while ( archiveFrameIndex != nextFrameIndex )
+        {
+            int test = archiveFrame();
+            if ( test != 0 )
+            {
+                fprintf( stderr, "Archive aborted" );
+                archiving = 0;
+                break;
+            }
+
+            archiveFrameIndex = (archiveFrameIndex+1) % FRAMES_TO_KEEP;
+        }
+
+        usleep(30000);
+
+        if ( thread_exit )
+            archiving = 0;
+    }
+
     if ( videoArchive )
         fclose( videoArchive );
+
     if ( textArchive )
         fclose( textArchive );
+
     videoArchive = 0;
     textArchive = 0;
-
-    save_archive = 0;
 }
 
 static int decode_frame(void)
@@ -698,9 +731,7 @@ static int decode_frame(void)
     unsigned int timeStamp_hi = timeStampSec / 4294.967296;
     unsigned int timeStamp_lo = fmod(timeStampSec, 4294.967296) * 1.0e6;
 
-    keepFrames(buffers[buf.index].start, buf.bytesused, timeStamp_lo);
-    if ( save_archive )
-        archiveFrame( buffers[buf.index].start, buf.bytesused, timeStamp_hi, timeStamp_lo );
+    keepFrames(buffers[buf.index].start, buf.bytesused, timeStamp_hi, timeStamp_lo);
 
     if (buf.bytesused > decoderBuffer->nAllocLen)
     {
@@ -765,7 +796,7 @@ static void saveEventJob(void)
     {
         if (sumTimestamps[i] == arg.eventStartTimeLo)
             sumIndex = i;
-        if (frameTimestamps[i] == arg.eventStartTimeLo)
+        if (frameTimestampLo[i] == arg.eventStartTimeLo)
             frameIndex = i;
         if (sumTimestamps[i] == arg.eventStopTimeLo)
             stopIndex = i;
@@ -813,7 +844,7 @@ static void saveEventJob(void)
 
     while (sumIndex != stopIndex)
     {
-        double delta = 1.0e-6 * ((int)frameTimestamps[frameIndex] - (int)arg.eventStartTimeLo);
+        double delta = 1.0e-6 * ((int)frameTimestampLo[frameIndex] - (int)arg.eventStartTimeLo);
         int counts = sumCounts[sumIndex];
         int sum = sumBuffers[sumIndex];
         xCentroid = (sum == 0) ? xCentroid : (double)xSumBuffers[sumIndex] / sum;
@@ -1256,7 +1287,9 @@ static void decodeLoop(void)
             if (0 == r)
             {
                 fprintf(stderr, "select timeout\n");
-                exit(EXIT_FAILURE);
+                continue;
+
+                // exit(EXIT_FAILURE);
             }
 
             if (decode_frame())
@@ -1700,6 +1733,7 @@ static void init_sentinel(void)
     }
 
     nextFrameIndex = 0;
+    archiveFrameIndex = 0;
     eventFrameIndex = 0;
     eventFrameStop = 0;
     nextSumIndex = 0;
@@ -1723,9 +1757,15 @@ static void init_sentinel(void)
 
     thread_exit = 0;
 
-    save_archive = strcmp( archive_path, "none" );
+    int rc = 0;
 
-    int rc = pthread_create(&saveEventThread_id, NULL, &saveEventThread, NULL);
+    rc = pthread_create(&archiveThread_id, NULL, &archiveThread, NULL);
+    if (rc)
+    {
+        fprintf(stderr, "Error creating archiveThread_id\n");
+    }
+
+    rc = pthread_create(&saveEventThread_id, NULL, &saveEventThread, NULL);
     if (rc)
     {
         fprintf(stderr, "Error creating saveEventThread_id\n");
@@ -1748,6 +1788,7 @@ static void uninit_sentinel(void)
 
     pthread_join(saveEventThread_id, NULL);
     pthread_join(decodeBufferThread_id, NULL);
+    pthread_join(archiveThread_id, NULL);
 
     // fprintf(stderr, "Free testFrame\n");
     free(testFrame);

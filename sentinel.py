@@ -4,6 +4,7 @@ import time
 import glob
 import subprocess
 import select
+import datetime
 
 from threading import Thread
 from queue import Queue, Empty
@@ -178,6 +179,7 @@ class SentinelServer(object):
     @cherrypy.expose
     @cherrypy.tools.json_out()
     def test(self):
+        print("test")
         self.test = Thread(target = self.testThread)
         self.test.start();
         return { "response": "OK" }
@@ -339,6 +341,108 @@ class SentinelServer(object):
         path = data["path"]
         r = self.funnelCmd("compose %s" % data["path"])
         return r
+
+    def checkForSync( self, frame ):
+        word = 0xffffffff
+        for c in frame:
+            if word == 1:
+                c = c & 0x0f
+                if c == 1:
+                    return False
+                if c == 5:
+                    return True
+
+            word = ((word << 8) & 0xffffffff) | c
+
+        return False
+
+    @cherrypy.expose
+    @cherrypy.tools.json_in()
+    @cherrypy.tools.json_out()
+    def playback(self):
+        if self.archivePath == "none":
+            return { "response": "No archive path"}
+
+        data = cherrypy.request.json
+        localTime = datetime.datetime(data["year"], data["month"], data["day"],
+                               data["hour"], data["minute"], data["second"])
+        dt = localTime.astimezone()
+
+        t0 = dt.timestamp()
+        tm = t0 - 2
+        tp = t0 + data["duration"]
+        path0 = f"{self.archivePath}/s{int(t0/3600)}/s{int(t0/60)}.h264"
+        pathm = f"{self.archivePath}/s{int(tm/3600)}/s{int(tm/60)}.h264"
+        pathp = f"{self.archivePath}/s{int(tp/3600)}/s{int(tp/60)}.h264"
+
+        l = []
+
+        if os.path.exists(pathm) and os.path.exists(pathm.replace(".h264",".txt")):
+            l.append(pathm)
+        if path0 not in l and os.path.exists(path0) and os.path.exists(path0.replace(".h264",".txt")):
+            l.append(path0)
+        if pathp not in l and os.path.exists(pathp) and os.path.exists(pathp.replace(".h264",".txt")):
+            l.append(pathp)
+
+        if len(l) == 0:
+            return { "response": "Archive file not found"}
+
+        utc = datetime.datetime.utcfromtimestamp(t0)
+        playbackPath = utc.strftime("new/s%Y%m%d_%H%M%S.h264")
+
+        pbv = None
+        pbt = None
+        syncFound = False
+        count = 0
+
+        for path in l:
+            fv = open(path,"rb")
+            ft = open(path.replace(".h264",".txt"),"r")
+
+            offset = 0
+
+            while True:
+                line = ft.readline()
+                if not line:
+                    break
+
+                items = line.split()
+                ftime = float(items[0])
+                fsize = int(items[1])
+
+                if ftime > tp:
+                    break
+
+                if ftime < tm:
+                    fv.seek(fsize,1)
+                    continue
+
+                frame = fv.read(fsize)
+                if not syncFound and not self.checkForSync(frame):
+                    continue
+
+                syncFound = True
+                if pbv == None:
+                    pbv = open(playbackPath,"wb")
+                    pbt = open(playbackPath.replace(".h264",".txt"),"w")
+
+                count = count+1
+                pbv.write(frame)
+                pbt.write("%3d %7.3f\n" % (count,ftime-t0))
+
+            fv.close()
+            ft.close()
+
+        if pbv == None:
+            return { "result": "Time period not in archive file"}
+
+        pbv.close()
+        pbt.close()
+
+        mp4File = playbackPath.replace(".h264",".mp4")
+        subprocess.run(["MP4Box", "-add",  playbackPath, "-fps", "30", "-quiet", mp4File]) 
+
+        return { "response": "OK"}
 
     @cherrypy.expose
     @cherrypy.tools.json_out()
