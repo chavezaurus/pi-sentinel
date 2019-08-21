@@ -1286,7 +1286,8 @@ static void decodeLoop(void)
 
             if (0 == r)
             {
-                fprintf(stderr, "select timeout\n");
+                time_t result = time(NULL);
+                fprintf(stderr, "select timeout at: %s\n", ctime(&result));
                 continue;
 
                 // exit(EXIT_FAILURE);

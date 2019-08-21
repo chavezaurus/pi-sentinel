@@ -5,6 +5,7 @@ import glob
 import subprocess
 import select
 import datetime
+import json
 
 from threading import Thread
 from queue import Queue, Empty
@@ -20,6 +21,7 @@ class SentinelServer(object):
         self.stopTime  = "05:00"
         self.devName = "/dev/video2"
         self.archivePath = "none"
+        self.firstTime = True
 
         if not os.path.exists("new"):
             os.mkdir("new")
@@ -152,10 +154,10 @@ class SentinelServer(object):
         self.background = Thread(target = self.backgroundProcess)
         self.background.start()
         self.comm = Thread(target = self.commProcess)
-        self.comm.start()
+        self.comm.start()            
 
     def testThread(self):
-        for i in range(20):
+        for i in range(10):
             time.sleep(69)
             response = self.funnelCmd("start")
             if response["response"] != "OK":
@@ -180,12 +182,20 @@ class SentinelServer(object):
     @cherrypy.tools.json_out()
     def test(self):
         print("test")
-        self.test = Thread(target = self.testThread)
-        self.test.start();
+        thread = Thread(target = self.testThread)
+        thread.daemon = True
+        thread.start();
         return { "response": "OK" }
 
     @cherrypy.expose
     def index(self):
+        if self.firstTime:
+            f = open("state.json")
+            if f:
+                s = f.read()
+                data = json.loads(s)
+                self.handle_set_state(data)
+            self.firstTime = False
         return open('public/index.html')
 
     @cherrypy.expose
@@ -293,12 +303,7 @@ class SentinelServer(object):
 
         return response
 
-    @cherrypy.expose
-    @cherrypy.tools.json_in()
-    @cherrypy.tools.json_out()
-    def set_state(self):
-        print("set_state")
-        data = cherrypy.request.json
+    def handle_set_state(self,data):
         r = self.funnelCmd("set_noise %d" % data["noiseThreshold"])
         if r["response"] != "OK":
             return r
@@ -320,6 +325,20 @@ class SentinelServer(object):
         self.stopTime  = "%02d:%02d" % (stop["h"], stop["m"])
         self.devName = data["devName"]
         self.archivePath = data["archivePath"]
+
+    @cherrypy.expose
+    @cherrypy.tools.json_in()
+    @cherrypy.tools.json_out()
+    def set_state(self):
+        print("set_state")
+        data = cherrypy.request.json
+        self.handle_set_state(data)
+
+        f = open("state.json","w")
+        if f:
+            s = json.dumps(data,sort_keys=True, indent=4)
+            f.write(s)
+            f.close()
 
         return { "response": "OK" }
 
@@ -394,6 +413,8 @@ class SentinelServer(object):
         pbt = None
         syncFound = False
         count = 0
+        firstFrameTime = 0.0
+        lastFrameTime = 0.0
 
         for path in l:
             fv = open(path,"rb")
@@ -430,6 +451,10 @@ class SentinelServer(object):
                 pbv.write(frame)
                 pbt.write("%3d %7.3f\n" % (count,ftime-t0))
 
+                if count == 1:
+                    firstFrameTime = ftime
+                lastFrameTime = ftime
+
             fv.close()
             ft.close()
 
@@ -439,8 +464,12 @@ class SentinelServer(object):
         pbv.close()
         pbt.close()
 
+        framesPerSecond = 30
+        if lastFrameTime != firstFrameTime:
+            framesPerSecond = int(round((count-1)/(lastFrameTime-firstFrameTime)))
+
         mp4File = playbackPath.replace(".h264",".mp4")
-        subprocess.run(["MP4Box", "-add",  playbackPath, "-fps", "30", "-quiet", mp4File]) 
+        subprocess.run(["MP4Box", "-add",  playbackPath, "-fps", "%d" % framesPerSecond, "-quiet", mp4File]) 
 
         return { "response": "OK"}
 

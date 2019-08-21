@@ -74,7 +74,6 @@ let Dropdown = {
         let vidObj = videoSource !== null ? {href: videoSource, download: basename(videoSource)} : {href: "#"};
         let jpgObj = videoPoster !== null ? {href: videoPoster, download: basename(videoPoster)} : {href: "#"};
 
-
         return m("div.dropdown", [
             m("button.pure-button", {id: "mydrop", onclick: function(){showDropdown=!showDropdown;}}, "Actions"),
             m(c, [
@@ -82,7 +81,8 @@ let Dropdown = {
                 m(forceClass, {href: "#", onclick: ForceTrigger }, "Force Trigger"),
                 m(compoClass, {href: "#", onclick: MakeComposite }, "Make Composite"),
                 m("a.dropdown-item", vidObj, "Get Video"),
-                m("a.dropdown-item", jpgObj, "Get Composite")
+                m("a.dropdown-item", jpgObj, "Get Composite"),
+                m(compoClass, {href: "#", onclick: SelfTest }, "Self Test")
             ])
         ])
     }
@@ -308,6 +308,18 @@ let RequestControls = function() {
             alert( "Get State failed");
         } else {
             sentinelState = result;
+        }
+    })
+    .catch(function(e) {
+        console.log( e.code );
+    })
+};
+
+let SelfTest = function() {
+    m.request({method: "POST", url: "test"})
+    .then(function(result) {
+        if ( result.response != "OK") {
+            alert("Self test failed");
         }
     })
     .catch(function(e) {
