@@ -228,6 +228,13 @@ let ClickTable = function(e) {
         date.setUTCMinutes(minute);
         date.setUTCSeconds(second);
 
+        playbackState.year = date.getFullYear();
+        playbackState.month = date.getMonth()+1;
+        playbackState.day = date.getDate();
+        playbackState.hour = date.getHours();
+        playbackState.minute = date.getMinutes();
+        playbackState.second = date.getSeconds();
+
         eventTimeString = date.toLocaleString();
     }
 };
@@ -383,14 +390,14 @@ let PlaybackPane = {
         return m("form.playback-container", {
             onsubmit: function(e) {e.preventDefault(), SubmitPlayback() }
         }, [
+            m("label.pblabel", "Year"), m("label.pblabel", "Month"), m("label.pblabel", "Day"),
             m("input.pbitem[type=number]",{oninput:function(e){playbackState.year=Number(e.target.value)},value: playbackState.year}),
             m("input.pbitem[type=number]",{oninput:function(e){playbackState.month=Number(e.target.value)},value: playbackState.month}),
             m("input.pbitem[type=number]",{oninput:function(e){playbackState.day=Number(e.target.value)},value: playbackState.day}),
-            m("label.pblabel", "Year"), m("label.pblabel", "Month"), m("label.pblabel", "Day"),
+            m("label.pblabel", "Hour"), m("label.pblabel", "Minute"), m("label.pblabel", "Second"),
             m("input.pbitem[type=number]",{oninput:function(e){playbackState.hour=Number(e.target.value)},value: playbackState.hour}),
             m("input.pbitem[type=number]",{oninput:function(e){playbackState.minute=Number(e.target.value)},value: playbackState.minute}),
             m("input.pbitem[type=number]",{oninput:function(e){playbackState.second=Number(e.target.value)},value: playbackState.second}),
-            m("label.pblabel", "Hour"), m("label.pblabel", "Minute"), m("label.pblabel", "Second"),
             m("label.pblabel", ""), m("label.pblabel", "Duration:"),
             m("input.pbitem[type=number]",{oninput:function(e){playbackState.duration=Number(e.target.value)},value: playbackState.duration}),
             m("button.pure-button.pbsubmit[type=submit]", "Submit")

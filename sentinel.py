@@ -84,13 +84,22 @@ class SentinelServer(object):
 
         #Wait for response from Sentinel Process
         while True:
-            if not self.y.poll(1000):
-                print("handleSentinelCommand: poll failed")
+            fdlst = self.y.poll(1000)
+            for fd,flags in fdlst:
+                if flags & (select.POLLERR|select.POLLHUP|select.POLLNVAL):
+                    print("Sentinel communications error")
+                    queue.put({'response': 'Sentinel comm error'})
+                    return
+
+            if not fdlst:
+                print("handleSentinelCommand: timeout")
+                queue.put({'response': 'Sentinel comm timeout'})
                 return
 
             line = self.sentinelProcess.stdout.readline()
             if not line:
                 print("handleSentinelCommand: readline failed")
+                queue.put({'response': 'Sentinel comm read failure'})
                 return
 
             #True responses start with a '='
@@ -128,8 +137,14 @@ class SentinelServer(object):
 
         while cherrypy.engine.state == cherrypy.engine.states.STARTED:
             #Dispose of miscellaneous output from Sentinel Process
-            while self.y.poll(1):
-                print(self.sentinelProcess.stdout.readline(),end='')
+            fdlist = self.y.poll(1)
+            for fd, flags in fdlist:
+                if flags & (select.POLLERR|select.POLLHUP):
+                    print("Sentinel communications error")
+                    return
+
+                if flags & select.POLLIN:
+                    print(self.sentinelProcess.stdout.readline(),end='')
 
             #Check for commands from web
             try:
@@ -150,11 +165,13 @@ class SentinelServer(object):
     def connectToSentinel(self):
         self.sentinelProcess = Popen(['./sentinel.bin', '-s'], stdin=PIPE, stdout=PIPE, shell=False, universal_newlines=True)
         self.y = select.poll()
-        self.y.register(self.sentinelProcess.stdout, select.POLLIN)
-        self.background = Thread(target = self.backgroundProcess)
-        self.background.start()
-        self.comm = Thread(target = self.commProcess)
-        self.comm.start()            
+        self.y.register(self.sentinelProcess.stdout, select.POLLIN|select.POLLERR|select.POLLHUP|select.POLLNVAL)
+        background = Thread(target = self.backgroundProcess)
+        background.daemon = True
+        background.start()
+        comm = Thread(target = self.commProcess)
+        comm.daemon = True
+        comm.start()            
 
     def testThread(self):
         for i in range(10):
@@ -225,9 +242,12 @@ class SentinelServer(object):
                 root = os.path.splitext(item["event"])[0]
                 fromPath = os.path.join(dfrom, root)
                 toPath = os.path.join(dto, root)
-                os.rename( fromPath+".mp4",  toPath+".mp4" )
-                os.rename( fromPath+".h264", toPath+".h264")
-                os.rename( fromPath+".txt",  toPath+".txt")
+                if os.path.exists( fromPath+".mp4"):
+                    os.rename( fromPath+".mp4",  toPath+".mp4" )
+                if os.path.exists( fromPath+".h264"):
+                    os.rename( fromPath+".h264", toPath+".h264")
+                if os.path.exists( fromPath+".txt"):
+                    os.rename( fromPath+".txt",  toPath+".txt")
                 if os.path.exists( fromPath+".jpg"):
                     os.rename( fromPath+".jpg", toPath+".jpg" )
                 if os.path.exists( fromPath+"m.jpeg"):
