@@ -58,13 +58,30 @@ Following is the **Request Update** button.  Pressing this sends a request to th
 * **Frame Rate** - If Pi Sentinel is processing camera data, this indicates the frame rate in frames pers second that the camera is generating.  The frame rate can change if the light level changes or if Pi Sentinel controls the rate itself.
 * **Zenith Amplitude** - If the Pi Sentinel is processing camera data, this is an estimate of the brightness at the zenith, and is produced by sampling a set of pixels near the center of the image.  This estimate is sometimes used by Pi Sentinel to control exposure time.
 * **Auto Start Time** - This is the local time at which Pi Sentinel will start processing camera data.  Typically, this is when you might expect to start seeing meteors.
-* **Auto Stop Time** - This is the local time at which Pi Sentinel will stop processing camera data.
-* **Noise Threshold** - Pixels that less than this number above background are ignored.
+* **Auto Stop Time** - This is the local time at which Pi Sentinel will stop processing camera data.  If both the Start Time and Stop Time are set to the same time, then neither action will occur and you will need to start or stop manually.
+* **Noise Threshold** - Pixels values that are less than this number above background are ignored.
 * **Trigger Threshold** - If the sum of pixel values that are more than the noise threshold above background exceeds this number, then a trigger is initiated and an event is produced.
 * **Max Events Per Hour** - The nominal maximum number of events that can be produced per hour.  The way this works can be explained with an example.  Suppose that the Max Events Per Hour is set to 5.  When processing begins, Pi Sentinel has a starting credit of 5 events.  Every time an event occurs, the credit is reduced by 1.  If the credit reaches 0, no more events are allowed.  However, one credit is added every 12 minutes (1/5 hour) up to a maximum of 5 credits.
 * **Camera Device** - This specifies which video device is being used by the Raspberry Pi to connect to the camera.  This will typically be `/dev/videoN` where N is some number.  Cameras often connect to several devices if they provide several different data formats.  For Pi Sentinel you need to connect to the device that provides H264 formatted data.
 * **Archive Path** - This specifies the path to the directory that will contain the archive, which is all the video that the camera produces while Pi Sentinel is processing data.  If you do not wish to archive all the video, the path should be specified as: `none`.
 
+Following is the **Submit** button.  If you change one of the parameters above, you must click this button to have these changes submitted to Pi Sentinel.
+
+If you press the **Actions** button, you will see drop-down selections, some of which are shown below:
+
+![Control Panel 1](doc/PiSentinelControls2.png)
+
+If Pi Sentinel is not processing, then pressing the **Toggle Start/Stop** selection will start processing.  Alternatively, if Pi Sentinel is processing, then pressing this selection will stop processing.
+
+Pressing the **Force Trigger** selection will cause an event to be generated.  This selection is available only when Pi Sentinel is processing data from the camera.
+
+Pressing the **Make Composite** selection will cause a composite image to be produced from the most recently selected event video.  Because making a composite image uses the same hardware decoder used by Pi Sentinel for normal camera processing, this selection is available only when Pi Sentinel is not currently processing data from the camera.  
+
+The **Get Video** selection is used to fetch the most recently viewed video to local storage, so on my Mac I use this to bring the video file from the Raspberry Pi to my Mac.
+
+The **Get Image** selection is used to fetch the most recently viewed composite image to local storage.  Of course, this works only if a composite image has been produced by the **Make Composite** selection as described above.
+
+The **Self Test** selection initiates a sequence of actions designed to fully test the Pi Sentinel system.  In this sequence, processing of camera data is started, then a Force Trigger is initiated, and then processing of camera data is stopped.  This sequence lasts for about three minutes and is repeated 10 times.  This selection is not available if Pi Sentinel is already processing camera data.
 
 ## Mask File
 
