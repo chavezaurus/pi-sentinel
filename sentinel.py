@@ -410,18 +410,16 @@ class SentinelServer(object):
         t0 = dt.timestamp()
         tm = t0 - 2
         tp = t0 + data["duration"]
-        path0 = f"{self.archivePath}/s{int(t0/3600)}/s{int(t0/60)}.h264"
-        pathm = f"{self.archivePath}/s{int(tm/3600)}/s{int(tm/60)}.h264"
-        pathp = f"{self.archivePath}/s{int(tp/3600)}/s{int(tp/60)}.h264"
+
+        firstMinute = int( tm / 60 )
+        lastMinute  = int( tp / 60 )
 
         l = []
 
-        if os.path.exists(pathm) and os.path.exists(pathm.replace(".h264",".txt")):
-            l.append(pathm)
-        if path0 not in l and os.path.exists(path0) and os.path.exists(path0.replace(".h264",".txt")):
-            l.append(path0)
-        if pathp not in l and os.path.exists(pathp) and os.path.exists(pathp.replace(".h264",".txt")):
-            l.append(pathp)
+        for minute in range(firstMinute,lastMinute+1):
+            path0 = f"{self.archivePath}/s{minute//60}/s{minute}.h264"
+            if path0 not in l and os.path.exists(path0) and os.path.exists(path0.replace(".h264",".txt")):
+                l.append(path0)
 
         if len(l) == 0:
             return { "response": "Archive file not found"}
