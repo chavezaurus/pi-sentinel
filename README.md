@@ -4,7 +4,7 @@ All-sky camera meteor detection and display software for the Raspberry Pi.
 
 ## Software Dependencies
 
-The Pi Sentinel software required the following external programs and libraries:
+The Pi Sentinel software requires the following external programs and libraries:
 
 ```
 sudo apt-get install git
@@ -37,51 +37,95 @@ The camera has a fisheye lens but the full sky image is somewhat cropped at the 
 
 I wanted to have the camera far away from the Raspberry Pi, but since USB cables are not designed to work over long distances, I am using an Active Extension Cable that has built in circuitry to boost the signal.
 
-I am using a Hard Drive Docking station that lets me attach a 1TB SATA hard drive for archival storage, and also provides a powered USB hub that connects to and provides power to the camera.
+I am using a Hard Drive Docking station that lets me attach a 1TB SATA hard drive for archival storage, and also provides a powered USB hub that connects to and provides power to the camera.  I suspect that the Raspberry Pi may not have sufficient power to drive the camera and extension cable directly, so if you do not elect to provide a video archive, I would recommend that you still use a powered USB hub to drive the camera and extension cable.
+
+## Quick Start
+
+Do this after installing the libraries mentioned above
+
+* Get the Pi Sentinel software
+
+`git clone https://github.com/chavezaurus/pi-sentinel.git`
+
+`cd pi-sentinel`
+
+* Make the C code
+
+`make`
+
+* Start Pi Sentinel and the web server
+
+`python3 sentinel.py`
+
+Now open your web browser and connect to the IP address of your Raspberry Pi using port 9090.  Yours will be different but on my browser the address looks like this:
+
+```192.168.1.20:9090```.
 
 ## User Interface
 
 The Pi-Sentinel software provides a web interface which allows the user to control the software and view events with just a web browser.  I am currently using Firefox on a Mac, which is on the same WiFi network as the Raspberry Pi.
 
-The interface consists of an image/video panel on the right and a control panel on the left.  The image panel is where event videos and images are shown.  The control panel lets you control the Pi Sentinel software and to examine events produced by Pi Sentinel.  The control panel is made up of three panes that you can view one at a time.  The first pane (Control) lets you control various aspects of the software and to view some status information.  The second pane (Events) lets you see all the events captured by Pi Sentinel and to select each event for examination.  The third pane (Playback) lets you produce an event using the video archive (if present) by specifying a time and duration.  
+The interface consists of an image/video panel on the right and a control panel on the left.  The image panel is where event videos and images are shown.  The control panel lets you control the Pi Sentinel software and examine events produced by Pi Sentinel.  The control panel is made up of three panes that you can view one at a time.  The first pane (Control) lets you control various aspects of the software and view status information.  The second pane (Events) lets you see all the events captured by Pi Sentinel and select each event for examination.  The third pane (Playback) lets you produce an event using the video archive (if present) by specifying a time and duration.  
 
 ### Control Pane
 
 ![Control Panel 1](doc/PiSentinelControls1.png)
 
-At the top of the pane is the **Actions** pop-down button, followed by three selection buttons: **Controls**, **Events**, and **Playback**.  This set of four buttons exists at the top of all three panes.  In fact, you use the selection buttons to select which pane is shown below.
+At the top of the pane is the **Actions** pop-down button, followed by three selection buttons: **Controls**, **Events**, and **Playback**.  This set of four buttons exists at the top of all three panes.  In fact, you use the selection buttons to select which pane is shown.
 
-Following is the **Request Update** button.  Pressing this sends a request to the Pi Sentinel software to update the table which follows with the current status and commanded state.  This table has the following items:
+Next is the **Request Update** button.  Pressing this sends a request to the Pi Sentinel software to update the table (below the **Request Update** button) with the current status and commanded state.  This table has the following items:
 
-* **Running** - This indicates whether or not the Pi Sentinel software is processing camera data looking for changes that might be caused by meteors.
-* **New, Saved, Trash** - This provides three numbers that indicate how many events are in the *new* directory, the *saved* directory, and the *trash* directory.  All new events are automatically placed in the *new* directory and it is up to the user to move them to one of the other directories.
-* **Frame Rate** - If Pi Sentinel is processing camera data, this indicates the frame rate in frames pers second that the camera is generating.  The frame rate can change if the light level changes or if Pi Sentinel controls the rate itself.
-* **Zenith Amplitude** - If the Pi Sentinel is processing camera data, this is an estimate of the brightness at the zenith, and is produced by sampling a set of pixels near the center of the image.  This estimate is sometimes used by Pi Sentinel to control exposure time.
+* **Running** - This indicates whether or not the Pi Sentinel software is processing camera data and looking for changes that might be caused by meteors.
+* **New, Saved, Trash** - This provides three numbers that indicate how many events are in the *new* directory, the *saved* directory, and the *trash* directory, respectively.  All new events are automatically placed in the *new* directory and it is up to the user to move them to one of the other directories.
+* **Frame Rate** - If Pi Sentinel is processing camera data, this indicates the frame rate (in frames per second) being generated by the camera.  The frame rate can change if the light level changes or if Pi Sentinel controls the rate itself.
+* **Zenith Amplitude** - If the Pi Sentinel is processing camera data, this is an estimate of the light brightness at the zenith.  It is produced by sampling a set of pixels near the center of the image.  This estimate is sometimes used by Pi Sentinel to control exposure time.
 * **Auto Start Time** - This is the local time at which Pi Sentinel will start processing camera data.  Typically, this is when you might expect to start seeing meteors.
-* **Auto Stop Time** - This is the local time at which Pi Sentinel will stop processing camera data.  If both the Start Time and Stop Time are set to the same time, then neither action will occur and you will need to start or stop manually.
+* **Auto Stop Time** - This is the local time at which Pi Sentinel will stop processing camera data.  If both the Start Time and Stop Time are set to the same time, then neither action will occur and you will need to start or stop processing manually.
 * **Noise Threshold** - Pixels values that are less than this number above background are ignored.
 * **Trigger Threshold** - If the sum of pixel values that are more than the noise threshold above background exceeds this number, then a trigger is initiated and an event is produced.
 * **Max Events Per Hour** - The nominal maximum number of events that can be produced per hour.  The way this works can be explained with an example.  Suppose that the Max Events Per Hour is set to 5.  When processing begins, Pi Sentinel has a starting credit of 5 events.  Every time an event occurs, the credit is reduced by 1.  If the credit reaches 0, no more events are allowed.  However, one credit is added every 12 minutes (1/5 hour) up to a maximum of 5 credits.
 * **Camera Device** - This specifies which video device is being used by the Raspberry Pi to connect to the camera.  This will typically be `/dev/videoN` where N is some number.  Cameras often connect to several devices if they provide several different data formats.  For Pi Sentinel you need to connect to the device that provides H264 formatted data.
 * **Archive Path** - This specifies the path to the directory that will contain the archive, which is all the video that the camera produces while Pi Sentinel is processing data.  If you do not wish to archive all the video, the path should be specified as: `none`.
 
-Following is the **Submit** button.  If you change one of the parameters above, you must click this button to have these changes submitted to Pi Sentinel.
+Next is the **Submit** button.  If you change one of the parameters above, you must click this button to have these changes submitted to Pi Sentinel.
 
-If you press the **Actions** button, you will see drop-down selections, some of which are shown below:
+If you press the **Actions** button, you will see drop-down commands, some of which are shown below:
 
 ![Control Panel 1](doc/PiSentinelControls2.png)
 
-If Pi Sentinel is not processing, then pressing the **Toggle Start/Stop** selection will start processing.  Alternatively, if Pi Sentinel is processing, then pressing this selection will stop processing.
+If Pi Sentinel is not processing, then pressing the **Toggle Start/Stop** selection will start processing.  Alternatively, if Pi Sentinel is processing, then pressing this command will stop processing.
 
-Pressing the **Force Trigger** selection will cause an event to be generated.  This selection is available only when Pi Sentinel is processing data from the camera.
+Pressing the **Force Trigger** command will cause an event to be immediately generated.  This command is available only when Pi Sentinel is processing data from the camera.
 
-Pressing the **Make Composite** selection will cause a composite image to be produced from the most recently selected event video.  Because making a composite image uses the same hardware decoder used by Pi Sentinel for normal camera processing, this selection is available only when Pi Sentinel is not currently processing data from the camera.  
+Pressing the **Make Composite** command will cause a composite image to be produced from the most recently selected event video.  Because making a composite image uses the same hardware decoder used by Pi Sentinel for normal camera processing, this command is available only when Pi Sentinel is not currently processing data from the camera.  
 
-The **Get Video** selection is used to fetch the most recently viewed video to local storage, so on my Mac I use this to bring the video file from the Raspberry Pi to my Mac.
+The **Get Video** command is used to fetch the most recently viewed video to local storage, so on my Mac I use this to bring the video file from the Raspberry Pi to my Mac.
 
-The **Get Image** selection is used to fetch the most recently viewed composite image to local storage.  Of course, this works only if a composite image has been produced by the **Make Composite** selection as described above.
+The **Get Image** command is used to fetch the most recently viewed composite image to local storage.  Of course, this works only if a composite image has already been produced by the **Make Composite** selection as described above.
 
-The **Self Test** selection initiates a sequence of actions designed to fully test the Pi Sentinel system.  In this sequence, processing of camera data is started, then a Force Trigger is initiated, and then processing of camera data is stopped.  This sequence lasts for about three minutes and is repeated 10 times.  This selection is not available if Pi Sentinel is already processing camera data.
+The **Self Test** command initiates a sequence of actions designed to fully test the Pi Sentinel system.  At the beginning of this sequence, processing of camera data is started, then after a period of time, a Force Trigger is initiated, and then, after a period of time, processing of camera data is stopped.  This sequence lasts for about three minutes and is repeated 10 times.  This command is not available if Pi Sentinel is already processing camera data.
+
+### Events Pane
+
+Press the **Events** button to select the **Events Pane** as shown below.
+
+![Events Panel](doc/PiSentinelEvents.png)
+
+The **Events Pane** contains three selection buttons (**New, Saved, Trash**), used to select one of three directories (`new`, `saved`, `trash`) containing event files.  When events occur, they are automatically placed in the `new` directory.  The left column shows a list of video file names associated with each event. The file name reflects the UTC time that the event occurred.  To play the video of the event, just click on the file name.  If a composite image has already been produced using the **Make Composite** command, you can see the composite image by clicking the file name again.  If you continue clicking the file name, you will toggle between seeing the composite image and the video player.
+
+The second column in the table lets you specify into which directory you would like to move the associated event. At first, all the rows indicate `new`, which means the event stays in the `new` directory.  If you click the `new` cell, it will change to `trash` indicating that the associated event will be moved to the `trash` directory.  If you click the cell again, it will change to `saved` which means the event will be moved to the `saved` directory.  Clicking the cell again changes it back to `new`, which is where you started.  This lets you quickly scan through all new events and decide where each event belongs.  The actual movement occurs when any one of the selection buttons (**New, Saved, Trash**) is pressed.
+
+Similarly, if you select the **Saved** button, you will see a table containing all the events that are in the `saved` directory.  These events can be examined and moved just like events in the `new` directory.  You can also examine and move events in the `trash` directory by selecting the **Trash** button.
+
+### Playback Pane
+
+Press the **Playback** button to select the **Playback Pane** as shown below.
+
+![Events Panel](doc/PiSentinelPlayback.png)
+
+If you decide to maintain a video archive, the Playback capability lets you go into the archive and generate event files at any time and with any duration, as if a genuine event occurred at that time.  This can be useful if you know from other sources that a meteor event occurred at a specific time but Pi Sentinel did not trigger for whatever reason.  Or, perhaps Pi Sentinel did produce an event, but the event video started too late or cut off too soon. In this case, the Playback capability will let you produce a new event with expanded time coverage.
+
+The **Playback** pane lets you specify a start time and a duration in seconds.  For convenience, the start time is initialized to the time of the last event selected.  If the video archive contains video that matches the specified start time and duration, then Pi Sentinel creates a new event and places it in the `new` directory where it can be examined and moved just like any other event.  To distinquish *normal* events from *playback* events, the *playback* event names are shorter since they do not specify time to millisecond resolution. 
 
 ## Mask File
 
@@ -90,3 +134,15 @@ The mask file is used to specify areas of the image that should be ignored.  The
 To produce this file, I started with an event video (either naturally occurring or forced) and created a composite JPEG image file.  I then opened the JPEG file with Gimp, scaled it to 640 x 360 pixels, selected the Pencil tool, widened the tool to a convenient size, selected solid red as the foreground color, and then painted the areas of the image red that were not open sky.  I then did an Export As... and saved the result as `mask.ppm`.  Gimp can be run on the Raspberry Pi or on any other computer.
 
 The mask file is read by the sentinel program every time it starts.
+
+## Things Left To Do
+
+* Prune older video archive files to avoid filling up the disk.
+* Get time history text file.
+* Add Empty Trash command
+* Add Long Exposure command to produce an image that can show stars
+
+## Contact
+
+J C Chavez chavezaurus@gmail.com
+
