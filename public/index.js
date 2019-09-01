@@ -80,8 +80,9 @@ let Dropdown = {
                 m("a.dropdown-item", {href: "#", onclick: ToggleStartStop }, "Toggle Start/Stop"),
                 m(forceClass, {href: "#", onclick: ForceTrigger }, "Force Trigger"),
                 m(compoClass, {href: "#", onclick: MakeComposite }, "Make Composite"),
+                m(compoClass, {href: "#", onclick: MakeAverage }, "Make Star Map"),
                 m("a.dropdown-item", vidObj, "Get Video"),
-                m("a.dropdown-item", jpgObj, "Get Composite"),
+                m("a.dropdown-item", jpgObj, "Get Image"),
                 m(compoClass, {href: "#", onclick: SelfTest }, "Self Test")
             ])
         ])
@@ -167,6 +168,28 @@ let MakeComposite = function() {
     .then( function(result) {
         if ( result.response !== "OK") {
             alert( "Cannot make composite while running");
+        }
+    })
+    .catch(function(e) {
+        console.log( e.code );
+    })
+};
+
+let MakeAverage = function() {
+    if ( videoSource === null ) {
+        alert("No video file selected");
+    }
+
+    let path = videoSource.replace(".mp4", ".h264");
+
+    m.request({
+        method: "POST",
+        url: "average",
+        body: {"path": path }
+    })
+    .then( function(result) {
+        if ( result.response !== "OK") {
+            alert( "Cannot make average while running");
         }
     })
     .catch(function(e) {

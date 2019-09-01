@@ -100,6 +100,7 @@ static int untriggered;
 static int triggerCounter;
 static int untriggerCounter;
 static int sumThreshold = 175;
+static int starMovieFrameCount = 0;
 
 static int eventDuration;
 static unsigned int eventTimeStamp_hi;
@@ -2072,7 +2073,7 @@ static void OverlayMask(void)
     }
 }
 
-static int ProcessAverageBuffer(void)
+static int ProcessAverageBuffer( int doSubtractInstead )
 {
     if (outputBuffer == 0)
         return 0;
@@ -2088,13 +2089,28 @@ static int ProcessAverageBuffer(void)
     if (error != OMX_ErrorNone)
         omx_die( error, "Could not Fill This Buffer");
 
-    for (int iy = 0; iy < 1080; ++iy)
+    if ( doSubtractInstead )
     {
-        for (int ix = 0; ix < 1920; ++ix)
+        for (int iy = 0; iy < 1080; ++iy)
         {
-            int indexY = 1920 * iy + ix;
+            for (int ix = 0; ix < 1920; ++ix)
+            {
+                int indexY = 1920 * iy + ix;
 
-            averageBuffer[indexY] += workingBuffer->pBuffer[indexY];
+                averageBuffer[indexY] -= workingBuffer->pBuffer[indexY];
+            }
+        }
+    }
+    else
+    {
+        for (int iy = 0; iy < 1080; ++iy)
+        {
+            for (int ix = 0; ix < 1920; ++ix)
+            {
+                int indexY = 1920 * iy + ix;
+
+                averageBuffer[indexY] += workingBuffer->pBuffer[indexY];
+            }
         }
     }
 
@@ -2234,9 +2250,19 @@ static void averagerLoop( const char* path )
 
     int frameCount = 0;
 
+    int halfFrameCount = (starMovieFrameCount-10) / 2;
+    int fullFrameCount = 2 * halfFrameCount;
+
+    fprintf(stderr,"Full: %d Half: %d\n", fullFrameCount, halfFrameCount );
+
     while (count > 0)
     {
-        frameCount += ProcessAverageBuffer();
+        if ( fullFrameCount != 0 && frameCount >= fullFrameCount )
+            break;
+
+        int doSubtractInstead = halfFrameCount != 0 && frameCount >= halfFrameCount;
+
+        frameCount += ProcessAverageBuffer( doSubtractInstead );
 
         memcpy(decoderBuffer->pBuffer, buffer, count);
         decoderBuffer->nFilledLen = count;
@@ -2268,15 +2294,25 @@ static void averagerLoop( const char* path )
 
     fclose(file);
 
-    usleep(10000);
-    ProcessAverageBuffer();
+    fprintf(stderr,"frameCount: %d\n", frameCount);
 
-    for (int i = 0; frameCount != 0 && i < 1920 * 1080; ++i)
+    if ( starMovieFrameCount != 0 )
     {
-        int scaled = averageBuffer[i];
-        scaled *= 10;
-        scaled /= frameCount;
-        composeBuffer[i] = (scaled > 255) ? 255 : scaled;
+        for (int i = 0; frameCount != 0 && i < 1920 * 1080; ++i)
+        {
+            double scaled = fabs(200.0 * averageBuffer[i]/frameCount);
+            composeBuffer[i] = (scaled > 250.0) ? 250 : scaled;
+        }
+    }
+    else
+    {
+        for (int i = 0; frameCount != 0 && i < 1920 * 1080; ++i)
+        {
+            int scaled = averageBuffer[i];
+            scaled *= 20;
+            scaled /= frameCount;
+            composeBuffer[i] = (scaled > 250) ? 250 : scaled;
+        }
     }
 
     free(averageBuffer);
@@ -2298,15 +2334,21 @@ static void EncodeLoop(const char* path)
     if ( error != OMX_ErrorNone )
         omx_die( error, "Cannot fill buffer" );
 
-    while ( outputBuffer == 0 )
+    sleep(1);
+    if ( outputBuffer == 0 )
     {
-        usleep(10000);
+        fprintf(stderr, "Encoder failer\n");
+        return;
     }
 
     FILE* file = fopen(path, "wb");
     if ( file == 0 )
+    {
+        fprintf(stderr,"Could not open %s\n", path );
         return;
+    }
 
+    fprintf(stderr,"Image written to: %s\n", path );
     fwrite(outputBuffer->pBuffer, outputBuffer->nFilledLen, 1, file);
     fclose(file);
 
@@ -2352,20 +2394,22 @@ static void* composeThread(void *args)
 
     running = 1;
 
+    strncpy( path, (char *)args, 254 );
+
     composeBuffer = (char *)malloc(1920 * 1088 * 3 / 2);
     memset(composeBuffer, 0, 1920 * 1088 * 3 / 2);
 
     init_decoder();
-    composeLoop( (unsigned char*)args );
+    composeLoop( path );
     uninit_decoder();
-
-    strncpy( path, (char *)args, 254 );
 
     char *pDot = strrchr(path, '.');
     if (pDot)
         strcpy(pDot, ".jpg");
     else
         strcat(path, ".jpg");
+
+    sleep(1);
 
     init_encoder();
     EncodeLoop( path );
@@ -2390,20 +2434,22 @@ static void* averageThread(void *args)
 
     running = 1;
 
+    strncpy( path, (char *)args, 254 );
+
     composeBuffer = (char *)malloc(1920 * 1088 * 3 / 2);
     memset(composeBuffer, 0, 1920 * 1088 * 3 / 2);
 
     init_decoder();
-    averagerLoop( (unsigned char*)args );
+    averagerLoop( path );
     uninit_decoder();
-
-    strncpy( path, (char *)args, 254 );
 
     char *pDot = strrchr(path, '.');
     if (pDot)
         strcpy(pDot, ".jpg");
     else
         strcat(path, ".jpg");
+
+    sleep(1);
 
     init_encoder();
     EncodeLoop( path );
@@ -2549,6 +2595,12 @@ static void runInteractiveLoop( int mum )
             } else {
                 printf( "=OK\n" );
             }
+        }
+        else if (!strcmp(token,"set_star_movie_frame_count"))
+        {
+            token = strtok(NULL," \n\t\r");
+            starMovieFrameCount = strtol(token, NULL, 0);
+            printf( "=OK\n");
         }
         else if (!strcmp(token,"set_noise"))
         {

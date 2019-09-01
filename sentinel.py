@@ -7,8 +7,10 @@ import select
 import datetime
 import json
 
+from shutil import rmtree
 from threading import Thread
 from queue import Queue, Empty
+from time import localtime, strftime
 
 from subprocess import Popen, PIPE, run
 
@@ -22,6 +24,7 @@ class SentinelServer(object):
         self.devName = "/dev/video2"
         self.archivePath = "none"
         self.firstTime = True
+        self.maxPercentUsage = 90.0
 
         if not os.path.exists("new"):
             os.mkdir("new")
@@ -45,6 +48,8 @@ class SentinelServer(object):
         if response["response"] == "No":
             return
             
+        print("Auto exposure at: ", strftime("%Y-%m-%d %H:%M:%S", localtime()))
+        run(['v4l2-ctl', '-d', self.devName, '-c', 'exposure_auto=3'])
         response = self.funnelCmd("stop")
         if response["response"] != "OK":
             print("Stop failed")
@@ -66,12 +71,14 @@ class SentinelServer(object):
 
         response = self.funnelCmd("get_frame_rate")
         if float(response["response"]) < 19.0:
+            print("Fixed exposure at: ", strftime("%Y-%m-%d %H:%M:%S", localtime()))
             run(['v4l2-ctl', '-d', self.devName, '-c', 'exposure_auto=1'])
             run(['v4l2-ctl', '-d', self.devName, '-c', 'exposure_absolute=333'])
             return
 
         response = self.funnelCmd("get_zenith_amplitude")
         if float(response["response"]) > 230.0:
+            print("Auto exposure at: ", strftime("%Y-%m-%d %H:%M:%S", localtime()))
             run(['v4l2-ctl', '-d', self.devName, '-c', 'exposure_auto=3'])
 
     def handleSentinelCommand(self,obj):
@@ -110,6 +117,16 @@ class SentinelServer(object):
             else:
                 print(line,end='')
 
+    def pruneArchive(self):
+        stat = os.statvfs(self.archivePath)
+        usage = 100.0 * (1.0 - stat.f_bavail/stat.f_blocks)
+        # print("Percent usage: %7.1f" % usage)
+        if usage > self.maxPercentUsage:
+            lst = os.listdir(self.archivePath)
+            lst.sort()
+            if len(lst) >= 2:
+                rmtree(os.path.join(self.archivePath,lst[0]))
+
     def backgroundProcess(self):
         #Wait for engine to start up
         while cherrypy.engine.state != cherrypy.engine.states.STARTED:
@@ -126,6 +143,9 @@ class SentinelServer(object):
                     self.runStopSequence()
                 else:
                     self.checkExposure()
+
+                if self.archivePath != "none":
+                    self.pruneArchive()
 
             lastTime = tnow
             time.sleep(10)
@@ -379,6 +399,26 @@ class SentinelServer(object):
         data = cherrypy.request.json
         path = data["path"]
         r = self.funnelCmd("compose %s" % data["path"])
+        return r
+
+    @cherrypy.expose
+    @cherrypy.tools.json_in()
+    @cherrypy.tools.json_out()
+    def average(self):
+        data = cherrypy.request.json
+        path = data["path"]
+        tpath = path.replace(".h264",".txt")
+        f = open(tpath)
+        if not f:
+            return { "response": "Text file not found"}
+
+        lines = f.readlines()
+        frames = len(lines)
+        r = self.funnelCmd("set_star_movie_frame_count %d" % frames)
+        if r["response"] != "OK":
+            return r
+
+        r = self.funnelCmd("average %s" % data["path"])
         return r
 
     def checkForSync( self, frame ):
