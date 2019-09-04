@@ -2300,7 +2300,10 @@ static void averagerLoop( const char* path )
     {
         for (int i = 0; frameCount != 0 && i < 1920 * 1080; ++i)
         {
-            double scaled = fabs(200.0 * averageBuffer[i]/frameCount);
+            double scaled = 200.0 * averageBuffer[i]/frameCount;
+            if ( scaled < 0.0 )
+                scaled = 0.0;
+
             composeBuffer[i] = (scaled > 250.0) ? 250 : scaled;
         }
     }

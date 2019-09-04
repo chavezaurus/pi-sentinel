@@ -23,7 +23,6 @@ class SentinelServer(object):
         self.stopTime  = "05:00"
         self.devName = "/dev/video2"
         self.archivePath = "none"
-        self.firstTime = True
         self.maxPercentUsage = 90.0
 
         if not os.path.exists("new"):
@@ -133,6 +132,12 @@ class SentinelServer(object):
             time.sleep(1)
 
         lastTime = 'XX:XX'
+        f = open("state.json")
+        if f:
+            s = f.read()
+            data = json.loads(s)
+            self.handle_set_state(data)
+
         while cherrypy.engine.state == cherrypy.engine.states.STARTED:
             #Check for timed actions
             tnow = time.strftime('%H:%M')
@@ -226,13 +231,6 @@ class SentinelServer(object):
 
     @cherrypy.expose
     def index(self):
-        if self.firstTime:
-            f = open("state.json")
-            if f:
-                s = f.read()
-                data = json.loads(s)
-                self.handle_set_state(data)
-            self.firstTime = False
         return open('public/index.html')
 
     @cherrypy.expose
