@@ -874,7 +874,7 @@ static void saveEventJob(void)
 
     int iFrameRate = round(frameRate);
 
-    sprintf(nameSystemCmd, "MP4Box -add %s -fps %d -quiet %s", nameVideoFile, iFrameRate, nameMp4File);
+    sprintf(nameSystemCmd, "MP4Box -add %s -fps %d -quiet -new %s", nameVideoFile, iFrameRate, nameMp4File);
     system(nameSystemCmd);
 }
 

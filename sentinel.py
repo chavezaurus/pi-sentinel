@@ -525,7 +525,7 @@ class SentinelServer(object):
             framesPerSecond = int(round((count-1)/(lastFrameTime-firstFrameTime)))
 
         mp4File = playbackPath.replace(".h264",".mp4")
-        subprocess.run(["MP4Box", "-add",  playbackPath, "-fps", "%d" % framesPerSecond, "-quiet", mp4File]) 
+        subprocess.run(["MP4Box", "-add",  playbackPath, "-fps", "%d" % framesPerSecond, "-quiet", "-new", mp4File]) 
 
         return { "response": "OK"}
 

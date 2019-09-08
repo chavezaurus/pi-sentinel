@@ -1,25 +1,28 @@
-import datetime
-import requests
-import pytz
-import json
-import os.path
-import time
+from datetime import datetime, timedelta
+from requests import post
+from pytz import timezone
+from os.path import exists
+from time import sleep
 
 def process():
-    mountain = pytz.timezone("US/Mountain")
-    utc = pytz.timezone("UTC")
-    start = mountain.localize( datetime.datetime(2019,8,26,22,0,0))
-    end   = mountain.localize( datetime.datetime(2019,8,27, 5,0,0))
+    mountain = timezone("US/Mountain")
+    utc = timezone("UTC")
+    start = mountain.localize( datetime(2019,9,3,21,0,0))
+    end   = start + timedelta(hours=8)
+    delta = timedelta(minutes=60)
+
     headers = {'Content-type': 'application/json'}
     address = "http://localhost:9090"
+    url1 = address + "/playback"
+    url2 = address + "/average"
 
     while start <= end:
-        url = address + "/playback"
-        obj = { "year": start.year, "month": start.month, "day": start.day,
-                "hour": start.hour, "minute": start.minute, "second": start.second,
-                "duration": 300 }
+        obj1 = { "year": start.year, "month": start.month, "day": start.day,
+                 "hour": start.hour, "minute": start.minute, "second": start.second,
+                 "duration": 300 }
 
-        r = requests.post(url, json=obj, headers=headers)
+        # Make long duration playback
+        r = post(url1, json=obj1, headers=headers)
         j = r.json()
         if j["response"] != "OK":
             print(j)
@@ -29,19 +32,28 @@ def process():
         path = utime.strftime("new/s%Y%m%d_%H%M%S.mp4")
         print(path)
 
-        url = address + "/average"
-        obj = {"path": path.replace(".mp4",".h264")}
+        obj2 = {"path": path.replace(".mp4",".h264")}
 
-        r = requests.post(url, json=obj, headers=headers)
+        # Make star chart from long duration playback
+        r = post(url2, json=obj2, headers=headers)
         j = r.json()
         if j["response"] != "OK":
             print(j)
             break;
 
-        while not os.path.exists(path.replace(".mp4",".jpg")):
-            time.sleep(5)
+        jpath = path.replace(".mp4",".jpg")
+        while not exists(jpath):
+            sleep(5)
 
-        start = start + datetime.timedelta(minutes=60)
+        # Replace 5 minute playback with 10 second playback to save space
+        obj1["duration"] = 10
+        r = post(url1, json=obj1, headers=headers)
+        j = r.json()
+        if j["response"] != "OK":
+            print(j)
+            break;
+
+        start = start + delta
 
 
 if __name__ == "__main__":
