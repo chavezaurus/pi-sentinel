@@ -6,6 +6,8 @@ import subprocess
 import select
 import datetime
 import json
+import ephem
+import math
 
 from shutil import rmtree
 from threading import Thread
@@ -528,6 +530,66 @@ class SentinelServer(object):
         subprocess.run(["MP4Box", "-add",  playbackPath, "-fps", "%d" % framesPerSecond, "-quiet", "-new", mp4File]) 
 
         return { "response": "OK"}
+
+    @cherrypy.expose
+    @cherrypy.tools.json_in()
+    @cherrypy.tools.json_out()
+    def stars(self):
+        starList = [ "Sirius", "Canopus", "Rigil Kentaurus", "Arcturus", "Vega", "Capella", "Rigel", "Procyon",
+                     "Achernar", "Betelgeuse", "Hadar", "Altair", "Acrux", "Aldebaran", "Antares", "Spica", "Pollux", "Fomalhaut",
+                     "Deneb", "Mimosa", "Regulus", "Adhara", "Shaula", "Castor", "Gacrux" ]
+        planetList = ["Mars", "Venus", "Jupiter", "Saturn"]
+
+        data = cherrypy.request.json
+        observer = ephem.Observer()
+        observer.lon = str(data["cameraLongitude"])
+        observer.lat = str(data["cameraLatitude"])
+        observer.elevation = data["cameraElevation"]
+
+        path = os.path.basename(data["path"])
+
+        year   = int(path[ 1: 5])
+        month  = int(path[ 5: 7])
+        day    = int(path[ 7: 9])
+        hour   = int(path[10:12])
+        minute = int(path[12:14])
+        second = int(path[14:16])
+
+        result = []
+
+        date = datetime.datetime(year,month,day,hour,minute,second)
+        observer.date = date
+
+        for name in starList:
+            star = ephem.star(name)
+            star.compute(observer)
+            if star.alt > 0.0:
+                azim = star.az*180.0/math.pi
+                elev = star.alt*180.0/math.pi
+                result.append( {"name": name, "azim": azim, "elev": elev} )
+
+        mars = ephem.Mars(date)
+        mars.compute(observer)
+        if mars.alt > 0.0:
+            azim = mars.az*180.0/math.pi
+            elev = mars.alt*180.0/math.pi
+            result.append( {"name": "Mars", "azim": azim, "elev": elev} )
+
+        jupiter = ephem.Jupiter(date)
+        jupiter.compute(observer)
+        if jupiter.alt > 0.0:
+            azim = jupiter.az*180.0/math.pi
+            elev = jupiter.alt*180.0/math.pi
+            result.append( {"name": "Jupiter", "azim": azim, "elev": elev} )
+
+        saturn = ephem.Saturn(date)
+        saturn.compute(observer)
+        if saturn.alt > 0.0:
+            azim = saturn.az*180.0/math.pi
+            elev = saturn.alt*180.0/math.pi
+            result.append( {"name": "Saturn", "azim": azim, "elev": elev} )
+
+        return result
 
     @cherrypy.expose
     @cherrypy.tools.json_out()

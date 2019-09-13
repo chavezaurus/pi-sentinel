@@ -1,5 +1,6 @@
 from math import sin, cos, sqrt, exp, atan2, acos, asin, pi
 from random import uniform
+import ephem
 
 V     = 0.002278
 S     = 0.639837
@@ -73,13 +74,15 @@ def AzElToPixel ( azim, elev ):
     px0 =   r*cos(angle) + COPx
     py0 =  -r*sin(angle) + COPy
 
-    # print( "px0: %f py0: %f" % (px0,py0) )
+    print( "px0: %f py0: %f" % (px0,py0) )
 
     px = px0
     py = py0
 
     for i in range(15):
         azt,elt = PixelToAzEl( px, py )
+
+        print("Az: %f El: %f" % (azt,elt))
         angle = pi/2.0 + azt + a0
 
         r = (pi/2-elt)/V
@@ -141,36 +144,75 @@ def FinalPixelToAzEl ( px, py ):
     return (azim,elev)
 
 def Test():
-    px = 986.444
-    py = 439.240
+    # px = 986.444
+    # py = 439.240
 
-    print( "px: %f py: %f" % (px,py) )
+    # print( "px: %f py: %f" % (px,py) )
 
-    (azim,elev) = PixelToAzEl(px, py)
-    (azim,elev) = RadToDeg(azim, elev)
+    # (azim,elev) = PixelToAzEl(px, py)
+    # (azim,elev) = RadToDeg(azim, elev)
 
-    print( "Az: %f El: %f" % (azim,elev))
+    # print( "Az: %f El: %f" % (azim,elev))
 
-    azim,elev = DegToRad(azim,elev)
+    # azim,elev = DegToRad(azim,elev)
+    # px,py,dist = AzElToPixel( azim,elev )
+
+    # print( "px: %f py: %f dist: %f" % (px,py,dist) )
+
+    # maxDist = 0.0
+    # maxAzim = 0.0
+    # maxElev = 0.0
+
+    # for i in range(10000):
+    #     azim = uniform(0.0,360.0)
+    #     elev = uniform(0.0,90.0)
+
+    #     azim2,elev2 = DegToRad(azim,elev)
+    #     px,py,dist = AzElToPixel( azim2,elev2 )
+
+    #     if dist > maxDist:
+    #         maxDist = dist
+    #         maxAzim = azim
+    #         maxElev = elev
+
+    # print("Max dist: %f at azim: %f elev: %f" % (maxDist,maxAzim,maxElev))
+
+    vega = ephem.star("Vega")
+    #vega.compute("2019/9/5")
+
+    abq = ephem.Observer()
+    abq.lon = "-106.5428"
+    abq.lat = "35.1497"
+    abq.elevation = 1690.0
+    abq.date = "2019/9/9 09:00:00"
+
+    print("Date: %s" % abq.date)
+
+    vega.compute(abq)
+    alt = float(vega.alt)*180.0/pi
+    az  = float(vega.az)*180.0/pi
+
+    print("Alt: %f Az: %f" % (alt,az))
+
+    azim,elev = DegToRad(az,alt)
     px,py,dist = AzElToPixel( azim,elev )
 
     print( "px: %f py: %f dist: %f" % (px,py,dist) )
 
-    maxDist = 0.0
-    maxAzim = 0.0
-    maxElev = 0.0
+    # azim = 0.0
+    # elev = 0.0
 
-    for i in range(1000000):
-        azim = uniform(0.0,360.0)
-        elev = uniform(0.0,90.0)
+    # azim,elev = DegToRad(azim,elev)
+    # px,py,dist = AzElToPixel( azim,elev )
 
-        azim2,elev2 = DegToRad(azim,elev)
-        px,py,dist = AzElToPixel( azim2,elev2 )
+    # print( "px: %f py: %f dist: %f" % (px,py,dist) )
 
-        if dist > maxDist:
-            maxDist = dist
-            maxAzim = azim
-            maxElev = elev
+    # azim,elev = PixelToAzEl(px, py)
+    # azim,elev = RadToDeg(azim, elev)
 
-    print("Max dist: %f at azim: %f elev: %f" % (maxDist,maxAzim,maxElev))
+    # print("Az: %f El: %f" % (azim,elev))
+
+
+
+
     
