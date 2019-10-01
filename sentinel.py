@@ -7,14 +7,116 @@ import select
 import datetime
 import json
 import ephem
-import math
+import numpy
+
+from math import pi, cos, sin, atan2, sqrt, acos, exp
 
 from shutil import rmtree
 from threading import Thread
 from queue import Queue, Empty
 from time import localtime, strftime
+from scipy.optimize import minimize
 
 from subprocess import Popen, PIPE, run
+
+def CalibrationVector(obj):
+    v = [ obj["V"], obj["S"], obj["D"], obj["a0"], obj["E"],
+            obj["eps"], obj["COPx"], obj["COPy"], obj["alpha"], obj["flat"] ]
+    return v
+
+def CalibrationObject(v):
+    obj = { "V": v[0], "S": v[1], "D": v[2], "a0": v[3], "E": v[4],
+            "eps": v[5], "COPx": v[6], "COPy": v[7], "alpha": v[8], "flat": v[9] }
+    return obj
+
+def CalibrationToRadians(obj):
+    obj["a0"]  = obj["a0"]  * pi / 180.0
+    obj["E"]   = obj["E"]   * pi / 180.0
+    obj["eps"] = obj["eps"] * pi / 180.0
+
+def CalibrationToDegrees(obj):
+    obj["a0"]  = obj["a0"]  * 180.0 / pi
+    obj["E"]   = obj["E"]   * 180.0 / pi
+    obj["eps"] = obj["eps"] * 180.0 / pi
+
+def CalibrationError(params, skyThing):
+    V     = params["V"]
+    S     = params["S"]
+    D     = params["D"]
+    a0    = params["a0"]
+    E     = params["E"]
+    eps   = params["eps"]
+    COPx  = params["COPx"]
+    COPy  = params["COPy"]
+    alpha = params["alpha"]
+    flat  = params["flat"]
+
+    px = skyThing["px"]
+    py = skyThing["py"]
+    azim = skyThing["azim"]
+    elev = skyThing["elev"]
+
+    if flat >= 1.0:
+        flat = 0.999999
+
+    dilation = sqrt(1-flat)
+    K = COPx*sin(alpha) + COPy*cos(alpha)
+    L = COPy*sin(alpha) - COPx*cos(alpha)
+    c = cos(alpha)*cos(alpha)*dilation + sin(alpha)*sin(alpha)/dilation
+    d = sin(alpha)*cos(alpha)*dilation - sin(alpha)*cos(alpha)/dilation;
+    e = -(K*cos(alpha)*dilation*dilation - COPy*dilation + L*sin(alpha))/dilation
+    f = sin(alpha)*cos(alpha)*dilation - sin(alpha)*cos(alpha)/ dilation
+    g = sin(alpha)*sin(alpha)*dilation + cos(alpha)*cos(alpha)/dilation
+    h = -(K*sin(alpha)*dilation*dilation - COPx*dilation - L*cos(alpha))/dilation
+    
+    # Apply the affine transformation to the input coordinates
+    # PURPOSE: Correct elliptical image distortion
+
+    pxt = g*px + f*py + h
+    pyt = d*px + c*py + e
+    # print( "pxt: %f pyt: %f" % (pxt,pyt))
+
+    x = pxt - COPx
+    y = pyt - COPy
+
+    # print( "x: %f y: %f" % (x,y))
+    r = sqrt( x*x + y*y )
+    u = V*r + S*(exp(D*r) - 1)
+    b = a0 - E + atan2(x, y)
+
+    # print( "b: %f" % b)
+    angle = b
+    z = u
+    if eps != 0.0:
+        z = acos(cos(u)*cos(eps)-sin(u)*sin(eps)*cos(b))
+        sinAngle = sin(b)*sin(u)/sin(z)
+        cosAngle = (cos(u)-cos(eps)*cos(z))/(sin(eps)*sin(z))
+        angle = atan2(sinAngle,cosAngle)
+
+    elev2 = pi/2 - z
+    azim2 = angle + E - pi # Measured from cardinal NORTH.
+
+    x2 = cos(azim2)*cos(elev2)
+    y2 = sin(azim2)*cos(elev2)
+
+    # These are in degrees so need to be converted to radians
+    x1 = cos(azim*pi/180.0)*cos(elev*pi/180.0)
+    y1 = sin(azim*pi/180.0)*cos(elev*pi/180.0)
+
+    dx = x1-x2
+    dy = y1-y2
+
+    esq = dx*dx+dy*dy
+    return esq
+
+def TotalCalibrationError(calVector, skyList ):
+    obj = CalibrationObject(calVector)
+    sum = 0.0
+    for skyThing in skyList:
+        sum = sum + CalibrationError(obj,skyThing)
+
+    print("Sum: %f" % sum)
+    return sum
 
 class SentinelServer(object):
 
@@ -564,32 +666,54 @@ class SentinelServer(object):
             star = ephem.star(name)
             star.compute(observer)
             if star.alt > 0.0:
-                azim = star.az*180.0/math.pi
-                elev = star.alt*180.0/math.pi
+                azim = star.az*180.0/pi
+                elev = star.alt*180.0/pi
                 result.append( {"name": name, "azim": azim, "elev": elev} )
 
         mars = ephem.Mars(date)
         mars.compute(observer)
         if mars.alt > 0.0:
-            azim = mars.az*180.0/math.pi
-            elev = mars.alt*180.0/math.pi
+            azim = mars.az*180.0/pi
+            elev = mars.alt*180.0/pi
             result.append( {"name": "Mars", "azim": azim, "elev": elev} )
 
         jupiter = ephem.Jupiter(date)
         jupiter.compute(observer)
         if jupiter.alt > 0.0:
-            azim = jupiter.az*180.0/math.pi
-            elev = jupiter.alt*180.0/math.pi
+            azim = jupiter.az*180.0/pi
+            elev = jupiter.alt*180.0/pi
             result.append( {"name": "Jupiter", "azim": azim, "elev": elev} )
 
         saturn = ephem.Saturn(date)
         saturn.compute(observer)
         if saturn.alt > 0.0:
-            azim = saturn.az*180.0/math.pi
-            elev = saturn.alt*180.0/math.pi
+            azim = saturn.az*180.0/pi
+            elev = saturn.alt*180.0/pi
             result.append( {"name": "Saturn", "azim": azim, "elev": elev} )
 
-        return result
+        return { "response": "OK", "sky_objects": result }
+
+
+    @cherrypy.expose
+    @cherrypy.tools.json_in()
+    @cherrypy.tools.json_out()
+    def do_calibration(self):
+        data = cherrypy.request.json
+        sky_object_list = data["sky_object_list"]
+        calibration_state = data["calibration_state"]
+        CalibrationToRadians( calibration_state )
+
+        calVector = CalibrationVector(calibration_state)
+
+        result = minimize(fun=TotalCalibrationError, x0=calVector, method="Nelder-Mead", args=(sky_object_list,), options={'maxiter': 10000, 'disp': False} )
+        print(result)
+
+        calObject = CalibrationObject(result["x"])
+        CalibrationToDegrees( calObject )
+        print(calObject)
+
+        return { "response": "OK", "calibration_state": calibration_state }
+        
 
     @cherrypy.expose
     @cherrypy.tools.json_out()

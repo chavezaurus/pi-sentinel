@@ -3,11 +3,12 @@ from requests import post
 from pytz import timezone
 from os.path import exists
 from time import sleep
+from os import remove
 
 def process():
     mountain = timezone("US/Mountain")
     utc = timezone("UTC")
-    start = mountain.localize( datetime(2019,9,3,21,0,0))
+    start = mountain.localize( datetime(2019,9,4,21,0,0))
     end   = start + timedelta(hours=8)
     delta = timedelta(minutes=60)
 
@@ -30,6 +31,8 @@ def process():
 
         utime = start.astimezone(utc)
         path = utime.strftime("new/s%Y%m%d_%H%M%S.mp4")
+        if exists(path):
+            remove(path)
         print(path)
 
         obj2 = {"path": path.replace(".mp4",".h264")}

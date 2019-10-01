@@ -67,10 +67,15 @@ var videoPoster = null;
 
 var canvasContext = null;
 var canvasImage = new Image();
+var pixelData = null;
+
+var landmarks = [];
+var skyObjectList = [];
 
 canvasImage.onload = function() {
     if (canvasContext != null) {
         canvasContext.drawImage(canvasImage,0,0);
+        pixelData = canvasContext.getImageData(0,0,canvasImage.width,canvasImage.height);
     }
 }
 
@@ -296,10 +301,10 @@ let DoHeader = {
         let controlsClass  =  paneSelect === "controls"  ? "button.pure-button.bselect" : "button.pure-button";
         let playbackClass  =  paneSelect === "playback"  ? "button.pure-button.bselect" : "button.pure-button";
         let calibrateClass =  paneSelect === "calibrate" ? "button.pure-button.bselect" : "button.pure-button";
+        let starsClass     =  paneSelect === "stars"     ? "button.pure-button.bselect" : "button.pure-button";
 
         return m("div.header-container", [
             m("h1.header-label", "Pi Sentinel"),
-            m(Dropdown),    
             m(controlsClass, {onclick: function() {
                 paneSelect = "controls";
                 RequestControls();
@@ -310,12 +315,16 @@ let DoHeader = {
                     UpdateEvents(eventsShown);
                 }
             }}, "Events"),
+            m(Dropdown),    
             m(playbackClass, {onclick: function() {
                 paneSelect = "playback";
             }}, "Playback"),
             m(calibrateClass, {onclick: function() {
                 paneSelect = "calibrate";
-            }}, "Cal")
+            }}, "Cal"),
+            m(starsClass, {onclick: function() {
+                paneSelect = "stars";
+            }}, "Starlist")
         ])
     }
 };
@@ -330,6 +339,33 @@ let DoTable = {
             m(newClass,   {onclick: function() {UpdateEvents("new")}},   "New"),
             m(savedClass, {onclick: function() {UpdateEvents("saved")}}, "Saved"),
             m(trashClass, {onclick: function() {UpdateEvents("trash")}}, "Trash"),
+        ])
+    }
+};
+
+let DoCalibration = function() {
+    m.request({
+        method: "POST",
+        url: "do_calibration",
+        body: { "sky_object_list": skyObjectList, "calibration_state": calibrationState }
+    })
+    .then( function(result) {
+        if ( result.response === "OK" ) {
+            calibrationState = result.calibration_state;
+        } else {
+            alert( result.response );
+        }
+    })
+    .catch(function(e) {
+        console.log( e.code );
+    })
+};
+
+let DoSkyTable = {
+    view: function() {
+        return m("div", [
+            m("button.pure-button", {onclick: DoCalibration}, "Do Calibration"),
+            m("button.pure-button", {onclick: function() {skyObjectList=[]}}, "Clear All")
         ])
     }
 };
@@ -479,12 +515,83 @@ let Video = {
         }
 };
 
+let pixelValue = function(px,py) {
+    let offset = 4*(py*canvasImage.width + px);
+    return pixelData.data[offset];
+}
+
+let NearestSkyObject = function(px,py) {
+    var nearest = null;
+    var dsquared = 0.0;
+
+    for ( var item of landmarks ) {
+        let dx = px - item.px;
+        let dy = py - item.py;
+        let test = dx*dx + dy*dy;
+
+        if ( item.circle && (nearest == null || test < dsquared) ) {
+            nearest = item;
+            dsquared = test;
+        }
+    }
+
+    return nearest;
+}
+
+let HandleCanvasClick = function(e) {
+    let eventLocation = getEventLocation(this,e);
+    let px = eventLocation.x;
+    let py = eventLocation.y;
+
+    var sum = 0;
+    var sumx = 0;
+    var sumy = 0;
+
+    for ( var iy = py-10; iy <= py+10; ++iy) {
+        if ( iy < 0 || iy >= canvasImage.height ) {
+            continue;
+        }
+        for ( var ix = px-10; ix <= px+10; ++ix) {
+            if ( ix < 0 || ix >= canvasImage.width ) {
+                continue;
+            }
+            let v = pixelValue(ix,iy);
+            sum += v;
+            sumx += ix*v;
+            sumy += iy*v;
+        }
+    }
+
+    var rx = 0;
+    var ry = 0;
+
+    if ( sum !== 0 ) {
+        rx = sumx/sum;
+        ry = sumy/sum;
+    } else {
+        alert("px: "+px+" py: "+py);
+    }
+
+    let nearest = NearestSkyObject(rx,ry);
+
+    let dx = nearest.px-rx;
+    let dy = nearest.py-ry;
+    let dd = Math.sqrt(dx*dx+dy*dy);
+
+    var r = confirm( nearest.name + " selected, " + dd.toFixed(1) + " pixels away.  Confirm?");
+
+    if ( r ) {
+        skyObjectList.push( {px: rx, py: ry, name: nearest.name, file: videoPoster, azim: nearest.azim, elev: nearest.elev} );
+    }
+};
+
 let CalibrateImage = {
     view: function() {
         return m('div', [
             m('canvas', {
                 width: 1920,
                 height: 1080,
+                onclick: HandleCanvasClick,
                 oncreate: function(vnode) {
                     canvasContext = vnode.dom.getContext("2d");
                     canvasImage.src = videoPoster;
@@ -522,6 +629,25 @@ let Table = {
             }))
         ]
         );
+    }
+};
+
+let SkyTable = {
+    view: function() {
+        return m("table.pure-table", [
+            m("thead", m("tr", [
+                m("th", "Time"),
+                m("th", "Object")
+            ])),
+            m("tbody", skyObjectList.map( function(item,index){
+                let temp = item.file.replace(eventsShown+'/s','').replace(".jpg","");
+                
+                return [m("tr", [
+                    m("td", temp),
+                    m("td", item.name)
+                ])]
+            }))
+        ])
     }
 };
 
@@ -739,9 +865,38 @@ let ControlStuff = {
     }
 };
 
+let DrawLandmarks = function() {
+    if ( canvasContext === null ){
+        return;
+    }
+
+    canvasContext.fillStyle = "red";
+    canvasContext.strokeStyle = "red";
+    canvasContext.font = "20px Georgia";
+
+    landmarks.forEach( function(item){
+        if ( item.circle ) {
+            canvasContext.beginPath();
+            canvasContext.arc(item.px, item.py, 10, 0, 2 * Math.PI);
+            canvasContext.stroke()
+        
+            canvasContext.fillText(item.name, item.px+12, item.py+5);    
+        } else {
+            canvasContext.beginPath();
+            canvasContext.arc(item.px, item.py, 5, 0, 2 * Math.PI);
+            canvasContext.fill()
+        
+            canvasContext.fillText(item.name, item.px+8, item.py+5);
+        }
+    })
+};
+
 let Transform = function( azElObject ) {
     let result = {};
     result.name = azElObject.name;
+    result.circle = azElObject.circle;
+    result.azim = azElObject.azim;
+    result.elev = azElObject.elev;
 
     var temp = DegToRad( azElObject.azim, azElObject.elev );
     temp = AzElToPixel( temp.azim, temp.elev );
@@ -753,30 +908,17 @@ let Transform = function( azElObject ) {
 }
 
 let UpdateStars = function() {
-    if ( canvasContext === null ){
-        return;
-    }
-
-    // canvasContext.globalAlpha = 1.0;
-
     canvasContext.clearRect(0,0,1920,1080);
     canvasContext.drawImage(canvasImage,0,0);
     CalculateAffines();
 
-    // canvasContext.globalAlpha = 0.5;
-    canvasContext.fillStyle = "red";
-    canvasContext.strokeStyle = "red";
-    canvasContext.font = "20px Georgia";
-
     let directions = [
-        {name: "N", azim:   0.0, elev:  0.0 },
-        {name: "E", azim:  90.0, elev:  0.0 },
-        {name: "S", azim: 180.0, elev:  0.0 },
-        {name: "W", azim: 270.0, elev:  0.0 },
-        {name: "Z", azim:   0.0, elev: 90.0 }
+        {name: "N", azim:   0.0, elev:  0.0, circle: false },
+        {name: "E", azim:  90.0, elev:  0.0, circle: false },
+        {name: "S", azim: 180.0, elev:  0.0, circle: false },
+        {name: "W", azim: 270.0, elev:  0.0, circle: false },
+        {name: "Z", azim:   0.0, elev: 90.0, circle: false }
     ];
-
-    let pixDirections = directions.map(Transform);
 
     let starRequest = {
         path: videoSource,
@@ -791,27 +933,52 @@ let UpdateStars = function() {
         body: starRequest
     })
     .then(function(result) {
-        let pixLocations = result.map(Transform);
-        pixLocations.forEach( function(item){
-            canvasContext.beginPath();
-            canvasContext.arc(item.px, item.py, 10, 0, 2 * Math.PI);
-            canvasContext.stroke()
-        
-            canvasContext.fillText(item.name, item.px+12, item.py+5);    
-        })
-        pixDirections.forEach( function(item){
-            canvasContext.beginPath();
-            canvasContext.arc(item.px, item.py, 5, 0, 2 * Math.PI);
-            canvasContext.fill()
-        
-            canvasContext.fillText(item.name, item.px+8, item.py+5);
-        });
+        if ( result.response === "OK") {
+            var temp = result.sky_objects.map( function(item){
+                item.circle = true;
+                return item;
+            });
     
-        })
+            landmarks = temp.concat(directions).map(Transform);
+            DrawLandmarks();    
+        } else {
+            alert( result.response );
+        }
+    })
     .catch(function(e) {
         console.log( e.code );
     })
+};
+/**
+ * Return the location of the element (x,y) being relative to the document.
+ * 
+ * @param {Element} obj Element to be located
+ */
+let getElementPosition = function(obj) {
+    var curleft = 0, curtop = 0;
+    if (obj.offsetParent) {
+        do {
+            curleft += obj.offsetLeft;
+            curtop += obj.offsetTop;
+        } while (obj = obj.offsetParent);
+        return { x: curleft, y: curtop };
+    }
+    return undefined;
+};
 
+/** 
+ * return the location of the click (or another mouse event) relative to the given element (to increase accuracy).
+ * @param {DOM Object} element A dom element (button,canvas,input etc)
+ * @param {DOM Event} event An event generate by an event listener.
+ */
+let getEventLocation = function(element,event){
+    // Relies on the getElementPosition function.
+    var pos = getElementPosition(element);
+    
+    return {
+    	x: (event.pageX - pos.x),
+      	y: (event.pageY - pos.y)
+    };
 };
 
 let CalibrationStuff = {
@@ -853,6 +1020,14 @@ let Layout = {
                 m("div.content",  m(CalibrateImage)),
                 m("div.footer",   eventTimeString),
                 m("div.controls", m(CalibrationStuff))
+            ]);
+        } else if ( paneSelect === "stars" ) {
+            return m("div.grid-container", {onclick: CheckDropdown}, [
+                m(DoHeader),
+                m("div.content",  m(CalibrateImage)),
+                m("div.footer",   eventTimeString),
+                m("div.controls", m(DoSkyTable)),
+                m("div.stable",   m(SkyTable))
             ]);
         }
     }
