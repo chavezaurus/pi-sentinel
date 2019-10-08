@@ -16,6 +16,7 @@
 #include <sys/time.h>
 #include <sys/mman.h>
 #include <sys/ioctl.h>
+#include <libgen.h>
 
 #include <linux/videodev2.h>
 #include "bcm_host.h"
@@ -130,6 +131,7 @@ static pthread_mutex_t composeBufferThreadMutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t composeBufferThreadCondition = PTHREAD_COND_INITIALIZER;
 static pthread_t composeThread_id;
 static pthread_t averageThread_id;
+static pthread_t analyzeThread_id;
 static pthread_t maskThread_id;
 static pthread_t archiveThread_id;
 
@@ -149,6 +151,32 @@ struct ThreadArguments
     unsigned int eventStopTimeLo;
     int jobPending;
 } threadingJob;
+
+struct CalibrationStruct
+{
+    double V;
+    double S;
+    double D;
+    double a0;
+    double E;
+    double eps;
+    double COPx;
+    double COPy;
+    double alpha;
+    double flat;
+
+    double c;
+    double d;
+    double e;
+    double f;
+    double g;
+    double h;
+
+    double px;
+    double py;
+    double azim;
+    double elev;
+} calibrationParameters;
 
 static void errno_exit(const char *s)
 {
@@ -1827,6 +1855,14 @@ static void uninit_decoder(void)
     // printf( "uninit_decoder\n" );
     OMX_ERRORTYPE error = OMX_ErrorNone;
 
+    error = OMX_SendCommand(decoderHandle, OMX_CommandFlush, 130, NULL );
+    if (error != OMX_ErrorNone)
+        omx_die( error, "Could not flush port 130");
+
+    error = OMX_SendCommand(decoderHandle, OMX_CommandFlush, 131, NULL );
+    if (error != OMX_ErrorNone)
+        omx_die( error, "Could not flush port 131");
+
     error = OMX_SendCommand(decoderHandle, OMX_CommandStateSet, OMX_StateIdle, NULL);
     if (error != OMX_ErrorNone)
         omx_die( error, "Could not set state to idle");
@@ -2117,6 +2153,243 @@ static int ProcessAverageBuffer( int doSubtractInstead )
     return 1;
 }
 
+void ReadCalibrationParameters( void )
+{
+    char str[1024];
+    char* pEnd;
+
+    FILE *file = fopen("calibration.json", "r");
+    if ( file == 0 )
+        return;
+
+    int count = fread(str,1,1023,file);
+
+    fclose( file );
+
+    calibrationParameters.V     =     0.002278;
+    calibrationParameters.S     =     0.639837;
+    calibrationParameters.D     =    -0.000982;
+    calibrationParameters.a0    =  -103.264;
+    calibrationParameters.E     =   253.174;
+    calibrationParameters.eps   =     1.053;
+    calibrationParameters.COPx  =   986.444;
+    calibrationParameters.COPy  =   539.240;
+    calibrationParameters.alpha =     1.570796;
+    calibrationParameters.flat  =     0.000000;
+
+    char* token = strtok(str," :\"\n\t\r");
+
+    if ( strcmp(token,"{") )
+        return;
+
+    for (;;)
+    {
+        token = strtok(NULL," :\"\n\t\r");
+
+        if ( !strcmp(token,"}"))
+            break;
+
+        if ( !strcmp(token,"V") )
+        {
+            token = strtok(NULL," :\"\n\t\r");
+            calibrationParameters.V = strtod(token,&pEnd);
+        }
+        else if ( !strcmp(token,"S") )
+        {
+            token = strtok(NULL," :\"\n\t\r");
+            calibrationParameters.S = strtod(token,&pEnd);
+        }
+        else if ( !strcmp(token,"D") )
+        {
+            token = strtok(NULL," :\"\n\t\r");
+            calibrationParameters.D = strtod(token,&pEnd);
+        }
+        else if ( !strcmp(token,"a0") )
+        {
+            token = strtok(NULL," :\"\n\t\r");
+            calibrationParameters.a0 = strtod(token,&pEnd);
+        }
+        else if ( !strcmp(token,"E") )
+        {
+            token = strtok(NULL," :\"\n\t\r");
+            calibrationParameters.E = strtod(token,&pEnd);
+        }
+        else if ( !strcmp(token,"eps") )
+        {
+            token = strtok(NULL," :\"\n\t\r");
+            calibrationParameters.eps = strtod(token,&pEnd);
+        }
+        else if ( !strcmp(token,"COPx") )
+        {
+            token = strtok(NULL," :\"\n\t\r");
+            calibrationParameters.COPx = strtod(token,&pEnd);
+        }
+        else if ( !strcmp(token,"COPy") )
+        {
+            token = strtok(NULL," :\"\n\t\r");
+            calibrationParameters.COPy = strtod(token,&pEnd);
+        }
+        else if ( !strcmp(token,"alpha") )
+        {
+            token = strtok(NULL," :\"\n\t\r");
+            calibrationParameters.alpha = strtod(token,&pEnd);
+        }
+        else if ( !strcmp(token,"flat") )
+        {
+            token = strtok(NULL," :\"\n\t\r");
+            calibrationParameters.flat = strtod(token,&pEnd);
+        }
+        else
+            break;
+    }
+
+    double alpha = calibrationParameters.alpha;
+    double flat  = calibrationParameters.flat;
+    double COPx  = calibrationParameters.COPx;
+    double COPy  = calibrationParameters.COPy;
+
+    double dilation = sqrt(1.0-flat);
+    double K = COPx*sin(alpha) + COPy*cos(alpha);
+    double L = COPy*sin(alpha) - COPx*cos(alpha);
+
+    calibrationParameters.c = cos(alpha)*cos(alpha)*dilation + sin(alpha)*sin(alpha)/dilation;
+    calibrationParameters.d = sin(alpha)*cos(alpha)*dilation - sin(alpha)*cos(alpha)/dilation;
+    calibrationParameters.e = -(K*cos(alpha)*dilation*dilation - COPy*dilation + L*sin(alpha))/dilation;
+    calibrationParameters.f = sin(alpha)*cos(alpha)*dilation - sin(alpha)*cos(alpha)/ dilation;
+    calibrationParameters.g = sin(alpha)*sin(alpha)*dilation + cos(alpha)*cos(alpha)/dilation;
+    calibrationParameters.h = -(K*sin(alpha)*dilation*dilation - COPx*dilation - L*cos(alpha))/dilation;
+}
+
+void CalibrationFunction( void )
+{
+    double V     = calibrationParameters.V;
+    double S     = calibrationParameters.S;
+    double D     = calibrationParameters.D;
+    double a0    = calibrationParameters.a0  * M_PI / 180.0;
+    double E     = calibrationParameters.E   * M_PI / 180.0;
+    double eps   = calibrationParameters.eps * M_PI / 180.0;
+    double COPx  = calibrationParameters.COPx;
+    double COPy  = calibrationParameters.COPy;
+
+    double c = calibrationParameters.c;
+    double d = calibrationParameters.d;
+    double e = calibrationParameters.e;
+    double f = calibrationParameters.f;
+    double g = calibrationParameters.g;
+    double h = calibrationParameters.h;
+
+    double px = calibrationParameters.px;
+    double py = calibrationParameters.py;
+    
+    // Apply the affine transformation to the input coordinates
+    // PURPOSE: Correct elliptical image distortion
+
+    double pxt = g*px + f*py + h;
+    double pyt = d*px + c*py + e;
+
+    double x = pxt - COPx;
+    double y = pyt - COPy;
+
+    double r = sqrt( x*x + y*y );
+    double u = V*r + S*(exp(D*r) - 1);
+    double b = a0 - E + atan2(x, y);
+
+    double angle = b;
+    double z = u;
+
+    if ( eps != 0.0 )
+    {
+        z = acos(cos(u)*cos(eps)-sin(u)*sin(eps)*cos(b));
+        double sinAngle = sin(b)*sin(u)/sin(z);
+        double cosAngle = (cos(u)-cos(eps)*cos(z))/(sin(eps)*sin(z));
+        angle = atan2(sinAngle,cosAngle);
+    }
+
+    double elev = M_PI/2 - z;
+    double azim = angle + E - M_PI; // Measured from cardinal NORTH.
+
+    azim *= 180.0 / M_PI;
+    elev *= 180.0 / M_PI;
+
+    while ( azim > 180.0 )
+        azim -= 360.0;
+
+    while ( azim <= -180.0 )
+        azim += 360.0;
+
+    calibrationParameters.azim = azim;
+    calibrationParameters.elev = elev;
+}
+
+static int ProcessAnalyzeBuffer( FILE* textFile, FILE* csvFile, double eventTime )
+{
+    struct tm * ptm;
+
+    if (outputBuffer == 0)
+        return 0;
+
+    OMX_ERRORTYPE error;
+
+    OMX_BUFFERHEADERTYPE *workingBuffer = outputBuffer;
+    outputBuffer = 0;
+
+    error = OMX_FillThisBuffer(decoderHandle,
+                               (workingBuffer == pingBuffer) ? pongBuffer : pingBuffer);
+
+    if (error != OMX_ErrorNone)
+        omx_die( error, "Could not Fill This Buffer");
+
+    int sum = 0;
+    double sumx = 0.0;
+    double sumy = 0.0;
+    int tcount = 0;
+
+    for (int iy = 0; iy < 1080; ++iy)
+    {
+        for (int ix = 0; ix < 1920; ++ix)
+        {
+            int index = 1920*iy + ix;
+
+            int test = workingBuffer->pBuffer[index] - averageBuffer[index];
+            if ( test > 0 )
+            {
+                sum += test;
+                sumx += ix * test;
+                sumy += iy * test;
+                ++tcount;
+            }
+        }
+    }
+
+    double px = sum == 0 ? 0 : sumx/sum;
+    double py = sum == 0 ? 0 : sumy/sum;
+
+    calibrationParameters.px = px;
+    calibrationParameters.py = py;
+
+    CalibrationFunction();
+
+    double azim = sum == 0 ? 0 : calibrationParameters.azim;
+    double elev = sum == 0 ? 0 : calibrationParameters.elev;
+
+    int    txtCount;
+    double timeOffset; 
+    fscanf( textFile, "%d %lf %*d %*d %*f %*f", &txtCount, &timeOffset );
+
+    double ftime = eventTime+timeOffset;
+    time_t dtime = ftime;
+
+    int millisec = (ftime-dtime)*1000;
+
+    ptm = localtime( &dtime );
+
+    fprintf( csvFile, "%04d%02d%02d_%02d%02d%02d_%03d,%6d,%9d,%10.1f,%10.1f,%10.2f,%10.2f\n", 
+                      ptm->tm_year+1900, ptm->tm_mon, ptm->tm_mday, ptm->tm_hour, ptm->tm_min, ptm->tm_sec, millisec,
+                      tcount, sum, px, py, azim, elev );
+
+    return 1;
+}
+
 static void composeLoop(unsigned char* path)
 {
     OMX_ERRORTYPE error = OMX_ErrorNone;
@@ -2228,10 +2501,185 @@ static void readJpegLoop(unsigned char* path)
     ProcessJpegMask();
 }
 
+static void analyzeLoop1( const char* path )
+{
+    OMX_ERRORTYPE error = OMX_ErrorNone;
+    char buffer[4096];
+
+    FILE *file = fopen(path, "rb");
+    if (file == 0)
+        return;
+
+    outputBuffer = 0;
+
+    int count = fread(buffer, 1, 4096, file);
+
+    decoderBuffer->nOffset = 0;
+    decoderBuffer->nInputPortIndex = 130;
+
+    int frameCount = 0;
+
+    while (count > 0)
+    {
+        frameCount += ProcessAverageBuffer( 0 );
+        if ( frameCount >= 30 )
+            break;
+
+        memcpy(decoderBuffer->pBuffer, buffer, count);
+        decoderBuffer->nFilledLen = count;
+        decodeBufferFull = 1;
+
+        error = OMX_EmptyThisBuffer(decoderHandle, decoderBuffer);
+        if (error != OMX_ErrorNone)
+        {
+            fprintf(stderr, "Cannot EmptyThisBuffer: %d, %s\n",
+                    errno, strerror(errno));
+
+            if (logfile != 0)
+            {
+                fflush(logfile);
+                fclose(logfile);
+            }
+
+            exit(EXIT_FAILURE);
+        }
+
+        pthread_mutex_lock(&composeBufferThreadMutex);
+        while (decodeBufferFull != 0)
+            pthread_cond_wait(&composeBufferThreadCondition, &composeBufferThreadMutex);
+
+        pthread_mutex_unlock(&composeBufferThreadMutex);
+
+        count = fread(buffer, 1, 4096, file);
+    }
+
+    if (frameCount == 0)
+        return;
+
+    readMask();
+
+    for ( int iy = 0; iy < 1080; ++iy )
+    {
+        for ( int ix = 0; ix < 1920; ++ix )
+        {
+            int index = 1920*iy + ix;
+            int indexMask = 640*(iy/3)+(ix/3);
+
+            averageBuffer[index] /= frameCount;
+            averageBuffer[index] += maskFrame[indexMask];
+        }
+    }
+
+    fclose(file);
+}
+
+static void analyzeLoop2( const char* path )
+{
+    OMX_ERRORTYPE error = OMX_ErrorNone;
+    char buffer[4096];
+    char tpath[255]; 
+
+    struct tm tmv;
+
+    strcpy(tpath,path);
+
+    int year;
+    int month;
+    int day;
+    int hour;
+    int minute;
+    int second;
+    int millisec;
+
+    sscanf(basename(tpath),"s%4d%2d%2d_%2d%2d%2d_%3d",&year,&month,&day,&hour,&minute,&second,&millisec);
+
+    fprintf( stderr, "%04d%02d%02d_%02d%02d%02d_%03d\n", year, month, day, hour, minute, second, millisec );
+
+    tmv.tm_year = year-1900;
+    tmv.tm_mon  = month;
+    tmv.tm_mday = day;
+    tmv.tm_hour = hour;
+    tmv.tm_min  = minute;
+    tmv.tm_sec  = second;
+
+    time_t eventTime = mktime(&tmv);
+    double ftime = eventTime + millisec/1000.0;
+
+    FILE *file = fopen(tpath, "rb");
+    if (file == 0)
+        return;
+
+    char *pDot = strrchr(tpath, '.');
+    if (pDot)
+        strcpy(pDot, ".txt");
+    else
+        strcat(tpath, ".txt");
+
+    FILE *textFile = fopen(tpath,"r");
+    if (textFile == 0)
+        return;
+
+    strcpy(tpath,path);
+    pDot = strrchr(tpath, '.');
+    if (pDot)
+        strcpy(pDot, ".csv");
+    else
+        strcat(tpath, ".csv");
+
+    FILE* csvFile = fopen(tpath,"w");
+    if ( csvFile == 0)
+        return;
+
+    int count = fread(buffer, 1, 4096, file);
+
+    int frameCount = 0;
+
+    decoderBuffer->nOffset = 0;
+    decoderBuffer->nInputPortIndex = 130;
+
+    ReadCalibrationParameters();
+
+    while (count > 0)
+    {
+        frameCount += ProcessAnalyzeBuffer( textFile, csvFile, ftime );
+
+        memcpy(decoderBuffer->pBuffer, buffer, count);
+        decoderBuffer->nFilledLen = count;
+        decodeBufferFull = 1;
+
+        error = OMX_EmptyThisBuffer(decoderHandle, decoderBuffer);
+        if (error != OMX_ErrorNone)
+        {
+            fprintf(stderr, "Cannot EmptyThisBuffer: %d, %s\n",
+                    errno, strerror(errno));
+
+            if (logfile != 0)
+            {
+                fflush(logfile);
+                fclose(logfile);
+            }
+
+            exit(EXIT_FAILURE);
+        }
+
+        pthread_mutex_lock(&composeBufferThreadMutex);
+        while (decodeBufferFull != 0)
+            pthread_cond_wait(&composeBufferThreadCondition, &composeBufferThreadMutex);
+
+        pthread_mutex_unlock(&composeBufferThreadMutex);
+
+        count = fread(buffer, 1, 4096, file);
+    }
+
+    fclose(file);
+    fclose(textFile);
+    fclose(csvFile);
+}
+
 static void averagerLoop( const char* path )
 {
     OMX_ERRORTYPE error = OMX_ErrorNone;
-    const char *buffer[4096];
+    char buffer[4096];
 
     FILE *file = fopen(path, "rb");
     if (file == 0)
@@ -2463,6 +2911,30 @@ static void* averageThread(void *args)
     running = 0;
 }
 
+static void* analyzeThread(void *args)
+{
+    char path[255];
+
+    running = 1;
+
+    strncpy( path, (char *)args, 254 );
+
+    averageBuffer = (int *)malloc(sizeof(int) * 1920 * 1088 * 3 / 2);
+    memset(averageBuffer, 0, sizeof(int) * 1920 * 1088 * 3 / 2);
+
+    init_decoder();
+    analyzeLoop1( path );
+    uninit_decoder();
+
+    init_decoder();
+    analyzeLoop2( path );
+    uninit_decoder();
+
+    free(averageBuffer);
+
+    running = 0;
+}
+
 static void runInteractiveLoop( int mum )
 {
     char cmd[100];
@@ -2576,6 +3048,26 @@ static void runInteractiveLoop( int mum )
             if ( rc != 0 )
             {
                 fprintf(stderr, "Error creating averageThread_id\n");
+                printf( "=No\n");
+            } else {
+                printf( "=OK\n" );
+            }
+        }
+        else if (!strcmp(token,"analyze"))
+        {
+            if ( running )
+            {
+                printf( "=No\n" );
+                continue;
+            }
+
+            token = strtok(NULL," \n\t\r");
+
+            int rc = pthread_create(&analyzeThread_id, NULL, &analyzeThread, token );
+            rc = rc || pthread_detach(analyzeThread_id);
+            if ( rc != 0 )
+            {
+                fprintf(stderr, "Error creating analyzeThread_id\n");
                 printf( "=No\n");
             } else {
                 printf( "=OK\n" );

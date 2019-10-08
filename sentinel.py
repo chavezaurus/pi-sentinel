@@ -29,6 +29,18 @@ def CalibrationObject(v):
             "eps": v[5], "COPx": v[6], "COPy": v[7], "alpha": v[8], "flat": v[9] }
     return obj
 
+def CalibrationTruncate(obj):
+    obj["V"]     = round(obj["V"],6)
+    obj["S"]     = round(obj["S"],6)
+    obj["D"]     = round(obj["D"],6)
+    obj["a0"]    = round(obj["a0"],3)
+    obj["E"]     = round(obj["E"],3)
+    obj["eps"]   = round(obj["eps"],3)
+    obj["COPx"]  = round(obj["COPx"],3)
+    obj["COPy"]  = round(obj["COPy"],3)
+    obj["alpha"] = round(obj["alpha"],6)
+    obj["flat"]  = round(obj["flat"],6)
+
 def CalibrationToRadians(obj):
     obj["a0"]  = obj["a0"]  * pi / 180.0
     obj["E"]   = obj["E"]   * pi / 180.0
@@ -115,7 +127,7 @@ def TotalCalibrationError(calVector, skyList ):
     for skyThing in skyList:
         sum = sum + CalibrationError(obj,skyThing)
 
-    print("Sum: %f" % sum)
+    # print("Sum: %f" % sum)
     return sum
 
 class SentinelServer(object):
@@ -469,6 +481,26 @@ class SentinelServer(object):
         self.archivePath = data["archivePath"]
 
     @cherrypy.expose
+    @cherrypy.tools.json_out()
+    def get_calibration(self):
+        response = {}
+        f = open("calibration.json")
+        if f:
+            s = f.read()
+            response = json.loads(s)
+        return response
+
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
+    def get_sky_objects(self):
+        response = {}
+        f = open("sky_list.json")
+        if f:
+            s = f.read()
+            response = json.loads(s)
+        return response
+
+    @cherrypy.expose
     @cherrypy.tools.json_in()
     @cherrypy.tools.json_out()
     def set_state(self):
@@ -479,6 +511,20 @@ class SentinelServer(object):
         f = open("state.json","w")
         if f:
             s = json.dumps(data,sort_keys=True, indent=4)
+            f.write(s)
+            f.close()
+
+        return { "response": "OK" }
+
+    @cherrypy.expose
+    @cherrypy.tools.json_in()
+    @cherrypy.tools.json_out()
+    def save_calibration(self):
+        data = cherrypy.request.json
+
+        f = open("calibration.json","w")
+        if f:
+            s = json.dumps(data,indent=4)
             f.write(s)
             f.close()
 
@@ -521,6 +567,15 @@ class SentinelServer(object):
             return r
 
         r = self.funnelCmd("average %s" % data["path"])
+        return r
+
+    @cherrypy.expose
+    @cherrypy.tools.json_in()
+    @cherrypy.tools.json_out()
+    def analyze(self):
+        data = cherrypy.request.json
+        path = data["path"]
+        r = self.funnelCmd("analyze %s" % data["path"])
         return r
 
     def checkForSync( self, frame ):
@@ -693,7 +748,6 @@ class SentinelServer(object):
 
         return { "response": "OK", "sky_objects": result }
 
-
     @cherrypy.expose
     @cherrypy.tools.json_in()
     @cherrypy.tools.json_out()
@@ -706,13 +760,29 @@ class SentinelServer(object):
         calVector = CalibrationVector(calibration_state)
 
         result = minimize(fun=TotalCalibrationError, x0=calVector, method="Nelder-Mead", args=(sky_object_list,), options={'maxiter': 10000, 'disp': False} )
-        print(result)
+        print("Iterations: %f Error: %f" % (result.nfev, result.fun) )
 
         calObject = CalibrationObject(result["x"])
         CalibrationToDegrees( calObject )
-        print(calObject)
+        CalibrationTruncate( calObject )
 
-        return { "response": "OK", "calibration_state": calibration_state }
+        calObject["cameraLatitude"]  = calibration_state["cameraLatitude"]
+        calObject["cameraLongitude"] = calibration_state["cameraLongitude"]
+        calObject["cameraElevation"] = calibration_state["cameraElevation"]
+
+        f = open("calibration.json","w")
+        if f:
+            s = json.dumps(calObject,indent=4)
+            f.write(s)
+            f.close()
+
+        f = open("sky_list.json","w")
+        if f:
+            s = json.dumps(sky_object_list,indent=4)
+            f.write(s)
+            f.close()
+
+        return { "response": "OK", "calibration_state": calObject }
         
 
     @cherrypy.expose

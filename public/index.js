@@ -280,6 +280,7 @@ let Dropdown = {
                 m("a.dropdown-item", {href: "#", onclick: ToggleStartStop }, "Toggle Start/Stop"),
                 m(forceClass, {href: "#", onclick: ForceTrigger }, "Force Trigger"),
                 m(compoClass, {href: "#", onclick: MakeComposite }, "Make Composite"),
+                m(compoClass, {href: "#", onclick: Analyze }, "Analyze"),
                 m(compoClass, {href: "#", onclick: MakeAverage }, "Make Star Map"),
                 m("a.dropdown-item", vidObj, "Get Video"),
                 m("a.dropdown-item", jpgObj, "Get Image"),
@@ -321,9 +322,11 @@ let DoHeader = {
             }}, "Playback"),
             m(calibrateClass, {onclick: function() {
                 paneSelect = "calibrate";
+                RequestCalibration();
             }}, "Cal"),
             m(starsClass, {onclick: function() {
                 paneSelect = "stars";
+                RequestSkyObjects();
             }}, "Starlist")
         ])
     }
@@ -425,6 +428,28 @@ let MakeAverage = function() {
     .then( function(result) {
         if ( result.response !== "OK") {
             alert( "Cannot make average while running");
+        }
+    })
+    .catch(function(e) {
+        console.log( e.code );
+    })
+};
+
+let Analyze = function() {
+    if ( videoSource === null ) {
+        alert("No video file selected");
+    }
+
+    let path = videoSource.replace(".mp4", ".h264");
+
+    m.request({
+        method: "POST",
+        url: "analyze",
+        body: {"path": path }
+    })
+    .then( function(result) {
+        if ( result.response !== "OK") {
+            alert( "Cannot analyze while running");
         }
     })
     .catch(function(e) {
@@ -689,6 +714,30 @@ let RequestControls = function() {
     })
 };
 
+let RequestCalibration = function() {
+    m.request({url: "get_calibration"})
+    .then(function(result) {
+        if ( Object.keys(result).length !== 0 ) {
+            calibrationState = result;
+        } 
+    })
+    .catch(function(e) {
+        console.log( e.code );
+    })
+};
+
+let RequestSkyObjects = function() {
+    m.request({url: "get_sky_objects"})
+    .then(function(result) {
+        if ( Object.keys(result).length !== 0 ) {
+            skyObjectList = result;
+        } 
+    })
+    .catch(function(e) {
+        console.log( e.code );
+    })
+};
+
 let SelfTest = function() {
     m.request({method: "POST", url: "test"})
     .then(function(result) {
@@ -815,14 +864,26 @@ let ControlPane = {
     }
 };
 
-let SubmitCalibration = {
-
+let SaveCalibration = function() {
+    m.request({
+        method: "POST",
+        url: "save_calibration",
+        body: calibrationState
+    })
+    .then(function(result) {
+        if ( result.response != "OK") {
+            alert("Submit failed");
+        }
+    })
+    .catch(function(e) {
+        console.log( e.code );
+    })
 };
 
 let CalibrationPane = {
     view: function() {
         return m("form.control-container", {
-            onsubmit: function(e) {e.preventDefault(), SubmitCalibration() }
+            onsubmit: function(e) {e.preventDefault(), SaveCalibration() }
         }, [
             m("div.citem-left", "Camera Latitude"),
             m("input.input[type=number,step='any']",{onchange:function(e){calibrationState.cameraLatitude=Number(e.target.value)},value: calibrationState.cameraLatitude}),
@@ -851,7 +912,7 @@ let CalibrationPane = {
             m("div.citem-left", "flat"),
             m("input.input[type=number,step='any']",{onchange:function(e){calibrationState.flat=Number(e.target.value)},value: calibrationState.flat}),
 
-            m("button.pure-button.citem-submit[type=submit]", "Calibrate")
+            m("button.pure-button.citem-submit[type=submit]", "Save Calibration")
         ])
     }
 };
