@@ -2589,9 +2589,11 @@ static void analyzeLoop2( const char* path )
     int hour;
     int minute;
     int second;
-    int millisec;
-
-    sscanf(basename(tpath),"s%4d%2d%2d_%2d%2d%2d_%3d",&year,&month,&day,&hour,&minute,&second,&millisec);
+    int millisec = 0;
+    if ( strlen(basename(tpath)) == 20 )
+        sscanf(basename(tpath),"s%4d%2d%2d_%2d%2d%2d",&year,&month,&day,&hour,&minute,&second);
+    else
+        sscanf(basename(tpath),"s%4d%2d%2d_%2d%2d%2d_%3d",&year,&month,&day,&hour,&minute,&second,&millisec);
 
     fprintf( stderr, "%04d%02d%02d_%02d%02d%02d_%03d\n", year, month, day, hour, minute, second, millisec );
 

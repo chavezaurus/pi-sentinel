@@ -64,6 +64,7 @@ var affineState = {
 
 var videoSource = null;
 var videoPoster = null;
+var csvFilePath = null;
 
 var canvasContext = null;
 var canvasImage = new Image();
@@ -273,6 +274,9 @@ let Dropdown = {
 
         let vidObj = videoSource !== null ? {href: videoSource, download: basename(videoSource)} : {href: "#"};
         let jpgObj = videoPoster !== null ? {href: videoPoster, download: basename(videoPoster)} : {href: "#"};
+        let csvObj = csvFilePath !== null ? {href: csvFilePath, download: basename(csvFilePath)} : {href: "#"};
+
+        console.log(csvObj);
 
         return m("div.dropdown", [
             m("button.pure-button", {id: "mydrop", onclick: function(){showDropdown=!showDropdown;}}, "Actions"),
@@ -284,6 +288,7 @@ let Dropdown = {
                 m(compoClass, {href: "#", onclick: MakeAverage }, "Make Star Map"),
                 m("a.dropdown-item", vidObj, "Get Video"),
                 m("a.dropdown-item", jpgObj, "Get Image"),
+                m("a.dropdown-item", csvObj, "Get CSV File"),
                 m(compoClass, {href: "#", onclick: SelfTest }, "Self Test")
             ])
         ])
@@ -391,6 +396,24 @@ let CheckForPoster = function( path ) {
     })
 };
 
+let CheckForCSV = function( path ) {
+    m.request({
+        method: "POST",
+        url: "file_exists",
+        body: { "path": path }
+    })
+    .then( function(result) {
+        if ( result.response === "Yes") {
+            csvFilePath = path;
+        } else {
+            csvFilePath = null;
+        }
+    })
+    .catch(function(e) {
+        console.log( e.code );
+    })
+};
+
 let MakeComposite = function() {
     if ( videoSource === null ) {
         alert("No video file selected");
@@ -450,6 +473,8 @@ let Analyze = function() {
     .then( function(result) {
         if ( result.response !== "OK") {
             alert( "Cannot analyze while running");
+        } else {
+            csvFilePath = videoSource.replace(".mp4",".csv");
         }
     })
     .catch(function(e) {
@@ -485,6 +510,7 @@ let ClickTable = function(e) {
         rowObj.selected = true;
         videoSource = rowObj.from+'/'+rowObj.event;
         posterTest = videoSource.replace(".mp4",".jpg");
+        csvTest = videoSource.replace(".mp4",".csv")
         if ( e.shiftKey ) {
             posterTest = videoSource.replace(".mp4", "m.jpg");
         }
@@ -493,6 +519,7 @@ let ClickTable = function(e) {
         } else {
             showComposite = false;
             CheckForPoster( posterTest );
+            CheckForCSV( csvTest );
         }
 
         let dateString = rowObj.event.substring(1,16);
