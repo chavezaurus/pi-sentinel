@@ -37,8 +37,209 @@ var playbackState = {
     duration: 3
 };
 
+var calibrationState = {
+    cameraLatitude: 35.1497,
+    cameraLongitude: -106.5428,
+    cameraElevation: 1690.0,
+    V:      0.002278,
+    S:      0.639837,
+    D:     -0.000982,
+    a0:  -103.264,
+    E:    253.174,
+    eps:    1.053,
+    COPx: 986.444,
+    COPy: 539.240,
+    alpha:  1.570796,
+    flat:   0.000000
+};
+
+var affineState = {
+    c: 0.0,
+    d: 0.0,
+    e: 0.0,
+    f: 0.0,
+    g: 0.0,
+    h: 0.0
+};
+
 var videoSource = null;
 var videoPoster = null;
+var csvFilePath = null;
+
+var canvasContext = null;
+var canvasImage = new Image();
+var pixelData = null;
+
+var landmarks = [];
+var skyObjectList = [];
+
+canvasImage.onload = function() {
+    if (canvasContext != null) {
+        canvasContext.drawImage(canvasImage,0,0);
+        pixelData = canvasContext.getImageData(0,0,canvasImage.width,canvasImage.height);
+    }
+}
+
+let CalculateAffines = function() {
+    let flat = calibrationState.flat;
+    let COPx = calibrationState.COPx;
+    let COPy = calibrationState.COPy;
+    let alpha = calibrationState.alpha;
+    let dilation = Math.sqrt(1-flat);
+    let K = COPx*Math.sin(alpha) + COPy*Math.cos(alpha);
+    let L = COPy*Math.sin(alpha) - COPx*Math.cos(alpha);
+    let c = Math.cos(alpha)*Math.cos(alpha)*dilation + Math.sin(alpha)*Math.sin(alpha)/dilation;
+    let d = Math.sin(alpha)*Math.cos(alpha)*dilation - Math.sin(alpha)*Math.cos(alpha)/dilation;
+    let e = -(K*Math.cos(alpha)*dilation*dilation - COPy*dilation + L*Math.sin(alpha))/dilation;
+    let f = Math.sin(alpha)*Math.cos(alpha)*dilation - Math.sin(alpha)*Math.cos(alpha)/ dilation;
+    let g = Math.sin(alpha)*Math.sin(alpha)*dilation + Math.cos(alpha)*Math.cos(alpha)/dilation;
+    let h = -(K*Math.sin(alpha)*dilation*dilation - COPx*dilation - L*Math.cos(alpha))/dilation;
+
+    affineState.c = c;
+    affineState.d = d;
+    affineState.e = e;
+    affineState.f = f;
+    affineState.g = g;
+    affineState.h = h;
+};
+
+// For given coordinates (x, y), calculate azimuth and elevation
+let PixelToAzEl = function( px, py ){
+    // Apply the affine transformation to the input coordinates
+    // PURPOSE: Correct elliptical image distortion
+
+    let c = affineState.c;
+    let d = affineState.d;
+    let e = affineState.e;
+    let f = affineState.f;
+    let g = affineState.g;
+    let h = affineState.h;
+
+    let pxt = g*px + f*py + h;
+    let pyt = d*px + c*py + e;
+
+    // Now apply the Borovicka calibration equations
+    // NOTE 1: The equation for "b" employs atan2(x,y), which is equivalent to (in Excel) atan2(y,x) = atan2(X,Y)
+    // NOTE 2: The equation set yields azimuth measured from cardinal SOUTH
+
+    let x = pxt - calibrationState.COPx;
+    let y = pyt - calibrationState.COPy;
+
+    let V = calibrationState.V;
+    let S = calibrationState.S;
+    let D = calibrationState.D;
+    let a0  = calibrationState.a0  * Math.PI / 180.0;
+    let E   = calibrationState.E   * Math.PI / 180.0;
+    let eps = calibrationState.eps * Math.PI / 180.0;
+
+    let r = Math.sqrt( x*x + y*y );
+    let u = V*r + S*(Math.exp(D*r) - 1)
+    let b = a0 - E + Math.atan2(x, y)
+
+    var angle = b;
+    var z = u;
+    if (eps != 0.0) {
+        z = Math.acos(Math.cos(u)*Math.cos(eps)-Math.sin(u)*Math.sin(eps)*Math.cos(b));
+        sinAngle = Math.sin(b)*Math.sin(u)/Math.sin(z);
+        cosAngle = (Math.cos(u)-Math.cos(eps)*Math.cos(z))/(Math.sin(eps)*Math.sin(z));
+        angle = Math.atan2(sinAngle,cosAngle);
+    }
+
+    obj = {}
+    obj.elev = Math.PI/2 - z;
+    obj.azim = angle + E; // Measured from cardinal SOUTH.
+
+    return obj;
+}
+
+let AzElToPixel = function(azim,elev) {
+    // Convert azimuth and elevation to pixel coordinates
+    // Azimuth in radians measured from cardinal SOUTH
+
+    let COPx = calibrationState.COPx;
+    let COPy = calibrationState.COPy;
+    let V = calibrationState.V;
+    let a0 = calibrationState.a0 * Math.PI / 180.0;
+    
+    //  First crude guess
+    var angle = Math.PI/2.0 + azim + a0;
+
+    var r = (Math.PI/2-elev)/V;
+
+    let px0 =   r*Math.cos(angle) + COPx;
+    let py0 =  -r*Math.sin(angle) + COPy;
+
+    var px = px0;
+    var py = py0;
+
+    for ( var i = 0; i < 15; ++i ) {
+        var azel = PixelToAzEl( px, py );
+        angle = Math.PI/2.0 + azel.azim + a0;
+
+        r = (Math.PI/2-azel.elev)/V;
+
+        let pxt =  r*Math.cos(angle) + COPx;
+        let pyt = -r*Math.sin(angle) + COPy;
+
+        let dpx = pxt - px0;
+        let dpy = pyt - py0;
+
+        px = px - dpx;
+        py = py - dpy;
+
+        let dsq = dpx*dpx + dpy*dpy;
+
+        if (dsq < 1.0e-6) {
+            break;
+        }
+    }
+
+    let obj = {};
+    obj.px = px;
+    obj.py = py;
+    return obj;
+};
+
+// Convert azimuth and elevation to degrees;
+let RadToDeg = function( azim,  elev ) {
+    // Subtract PI tp express azimuth conventionally, i.e., measured from cardinal North
+    azim = azim - Math.PI;
+
+    // Convert radians to degrees
+    elev = elev * 180.0 / Math.PI;
+    azim = azim * 180.0 / Math.PI;
+
+    // Compute azimuth on the interval [0, 360)
+    while (azim < 0.0) {
+        azim = azim + 360.0;
+    }
+
+    while (azim >= 360.0) {
+        azim = azim - 360.0;
+    }
+
+    let obj = {};
+    obj.azim = azim;
+    obj.elev = elev;
+
+    return obj;
+}
+
+// Convert ezimuth and elevation to radians
+let DegToRad = function( azim, elev ) {
+    // Add 180 tp express azimuth measured from cardinal Soutn
+    azim = azim + 180.0;
+
+    // Convert degrees to radians
+    elev = elev * Math.PI / 180.0;
+    azim = azim * Math.PI / 180.0;
+
+    let obj = {};
+    obj.azim = azim;
+    obj.elev = elev;
+
+    return obj;
+}
 
 let basename = function(path) {
     return path.replace(/.*\//, '');
@@ -73,6 +274,9 @@ let Dropdown = {
 
         let vidObj = videoSource !== null ? {href: videoSource, download: basename(videoSource)} : {href: "#"};
         let jpgObj = videoPoster !== null ? {href: videoPoster, download: basename(videoPoster)} : {href: "#"};
+        let csvObj = csvFilePath !== null ? {href: csvFilePath, download: basename(csvFilePath)} : {href: "#"};
+
+        console.log(csvObj);
 
         return m("div.dropdown", [
             m("button.pure-button", {id: "mydrop", onclick: function(){showDropdown=!showDropdown;}}, "Actions"),
@@ -80,9 +284,11 @@ let Dropdown = {
                 m("a.dropdown-item", {href: "#", onclick: ToggleStartStop }, "Toggle Start/Stop"),
                 m(forceClass, {href: "#", onclick: ForceTrigger }, "Force Trigger"),
                 m(compoClass, {href: "#", onclick: MakeComposite }, "Make Composite"),
+                m(compoClass, {href: "#", onclick: Analyze }, "Analyze"),
                 m(compoClass, {href: "#", onclick: MakeAverage }, "Make Star Map"),
                 m("a.dropdown-item", vidObj, "Get Video"),
                 m("a.dropdown-item", jpgObj, "Get Image"),
+                m("a.dropdown-item", csvObj, "Get CSV File"),
                 m(compoClass, {href: "#", onclick: SelfTest }, "Self Test")
             ])
         ])
@@ -97,13 +303,14 @@ let CheckDropdown = function(e) {
 
 let DoHeader = {
     view: function() {
-        let eventsClass   =  paneSelect === "events"   ? "button.pure-button.bselect" : "button.pure-button";
-        let controlsClass =  paneSelect === "controls" ? "button.pure-button.bselect" : "button.pure-button";
-        let playbackClass =  paneSelect === "playback" ? "button.pure-button.bselect" : "button.pure-button";
+        let eventsClass    =  paneSelect === "events"    ? "button.pure-button.bselect" : "button.pure-button";
+        let controlsClass  =  paneSelect === "controls"  ? "button.pure-button.bselect" : "button.pure-button";
+        let playbackClass  =  paneSelect === "playback"  ? "button.pure-button.bselect" : "button.pure-button";
+        let calibrateClass =  paneSelect === "calibrate" ? "button.pure-button.bselect" : "button.pure-button";
+        let starsClass     =  paneSelect === "stars"     ? "button.pure-button.bselect" : "button.pure-button";
 
         return m("div.header-container", [
             m("h1.header-label", "Pi Sentinel"),
-            m(Dropdown),    
             m(controlsClass, {onclick: function() {
                 paneSelect = "controls";
                 RequestControls();
@@ -114,9 +321,18 @@ let DoHeader = {
                     UpdateEvents(eventsShown);
                 }
             }}, "Events"),
+            m(Dropdown),    
             m(playbackClass, {onclick: function() {
                 paneSelect = "playback";
-            }}, "Playback")
+            }}, "Playback"),
+            m(calibrateClass, {onclick: function() {
+                paneSelect = "calibrate";
+                RequestCalibration();
+            }}, "Cal"),
+            m(starsClass, {onclick: function() {
+                paneSelect = "stars";
+                RequestSkyObjects();
+            }}, "Starlist")
         ])
     }
 };
@@ -135,6 +351,33 @@ let DoTable = {
     }
 };
 
+let DoCalibration = function() {
+    m.request({
+        method: "POST",
+        url: "do_calibration",
+        body: { "sky_object_list": skyObjectList, "calibration_state": calibrationState }
+    })
+    .then( function(result) {
+        if ( result.response === "OK" ) {
+            calibrationState = result.calibration_state;
+        } else {
+            alert( result.response );
+        }
+    })
+    .catch(function(e) {
+        console.log( e.code );
+    })
+};
+
+let DoSkyTable = {
+    view: function() {
+        return m("div", [
+            m("button.pure-button", {onclick: DoCalibration}, "Do Calibration"),
+            m("button.pure-button", {onclick: function() {skyObjectList=[]}}, "Clear All")
+        ])
+    }
+};
+
 let CheckForPoster = function( path ) {
     m.request({
         method: "POST",
@@ -146,6 +389,24 @@ let CheckForPoster = function( path ) {
             videoPoster = path;
         } else {
             videoPoster = null;
+        }
+    })
+    .catch(function(e) {
+        console.log( e.code );
+    })
+};
+
+let CheckForCSV = function( path ) {
+    m.request({
+        method: "POST",
+        url: "file_exists",
+        body: { "path": path }
+    })
+    .then( function(result) {
+        if ( result.response === "Yes") {
+            csvFilePath = path;
+        } else {
+            csvFilePath = null;
         }
     })
     .catch(function(e) {
@@ -197,6 +458,30 @@ let MakeAverage = function() {
     })
 };
 
+let Analyze = function() {
+    if ( videoSource === null ) {
+        alert("No video file selected");
+    }
+
+    let path = videoSource.replace(".mp4", ".h264");
+
+    m.request({
+        method: "POST",
+        url: "analyze",
+        body: {"path": path }
+    })
+    .then( function(result) {
+        if ( result.response !== "OK") {
+            alert( "Cannot analyze while running");
+        } else {
+            csvFilePath = videoSource.replace(".mp4",".csv");
+        }
+    })
+    .catch(function(e) {
+        console.log( e.code );
+    })
+};
+
 let ClickTable = function(e) {
     let row = e.target.parentElement.rowIndex-1;
     let column = e.target.cellIndex;
@@ -225,6 +510,7 @@ let ClickTable = function(e) {
         rowObj.selected = true;
         videoSource = rowObj.from+'/'+rowObj.event;
         posterTest = videoSource.replace(".mp4",".jpg");
+        csvTest = videoSource.replace(".mp4",".csv")
         if ( e.shiftKey ) {
             posterTest = videoSource.replace(".mp4", "m.jpg");
         }
@@ -233,6 +519,7 @@ let ClickTable = function(e) {
         } else {
             showComposite = false;
             CheckForPoster( posterTest );
+            CheckForCSV( csvTest );
         }
 
         let dateString = rowObj.event.substring(1,16);
@@ -280,6 +567,96 @@ let Video = {
         }
 };
 
+let pixelValue = function(px,py) {
+    let offset = 4*(py*canvasImage.width + px);
+    return pixelData.data[offset];
+}
+
+let NearestSkyObject = function(px,py) {
+    var nearest = null;
+    var dsquared = 0.0;
+
+    for ( var item of landmarks ) {
+        let dx = px - item.px;
+        let dy = py - item.py;
+        let test = dx*dx + dy*dy;
+
+        if ( item.circle && (nearest == null || test < dsquared) ) {
+            nearest = item;
+            dsquared = test;
+        }
+    }
+
+    return nearest;
+}
+
+let HandleCanvasClick = function(e) {
+    let eventLocation = getEventLocation(this,e);
+    let px = eventLocation.x;
+    let py = eventLocation.y;
+
+    var sum = 0;
+    var sumx = 0;
+    var sumy = 0;
+
+    for ( var iy = py-10; iy <= py+10; ++iy) {
+        if ( iy < 0 || iy >= canvasImage.height ) {
+            continue;
+        }
+        for ( var ix = px-10; ix <= px+10; ++ix) {
+            if ( ix < 0 || ix >= canvasImage.width ) {
+                continue;
+            }
+            let v = pixelValue(ix,iy);
+            sum += v;
+            sumx += ix*v;
+            sumy += iy*v;
+        }
+    }
+
+    var rx = 0;
+    var ry = 0;
+
+    if ( sum !== 0 ) {
+        rx = sumx/sum;
+        ry = sumy/sum;
+    } else {
+        alert("px: "+px+" py: "+py);
+    }
+
+    let nearest = NearestSkyObject(rx,ry);
+
+    let dx = nearest.px-rx;
+    let dy = nearest.py-ry;
+    let dd = Math.sqrt(dx*dx+dy*dy);
+
+    var r = confirm( nearest.name + " selected, " + dd.toFixed(1) + " pixels away.  Confirm?");
+
+    if ( r ) {
+        skyObjectList.push( {px: rx, py: ry, name: nearest.name, file: videoPoster, azim: nearest.azim, elev: nearest.elev} );
+    }
+};
+
+let CalibrateImage = {
+    view: function() {
+        return m('div', [
+            m('canvas', {
+                width: 1920,
+                height: 1080,
+                onclick: HandleCanvasClick,
+                oncreate: function(vnode) {
+                    canvasContext = vnode.dom.getContext("2d");
+                    canvasImage.src = videoPoster;
+                    UpdateStars();
+                },
+                onremove: function() {
+                    canvasContext = null;
+                }
+            })
+        ])
+    }
+};
+
 let Table = {
     oncreate: function() { 
         if ( eventsShown === "" ){
@@ -304,6 +681,25 @@ let Table = {
             }))
         ]
         );
+    }
+};
+
+let SkyTable = {
+    view: function() {
+        return m("table.pure-table", [
+            m("thead", m("tr", [
+                m("th", "Time"),
+                m("th", "Object")
+            ])),
+            m("tbody", skyObjectList.map( function(item,index){
+                let temp = item.file.replace(eventsShown+'/s','').replace(".jpg","");
+                
+                return [m("tr", [
+                    m("td", temp),
+                    m("td", item.name)
+                ])]
+            }))
+        ])
     }
 };
 
@@ -339,6 +735,30 @@ let RequestControls = function() {
         } else {
             sentinelState = result;
         }
+    })
+    .catch(function(e) {
+        console.log( e.code );
+    })
+};
+
+let RequestCalibration = function() {
+    m.request({url: "get_calibration"})
+    .then(function(result) {
+        if ( Object.keys(result).length !== 0 ) {
+            calibrationState = result;
+        } 
+    })
+    .catch(function(e) {
+        console.log( e.code );
+    })
+};
+
+let RequestSkyObjects = function() {
+    m.request({url: "get_sky_objects"})
+    .then(function(result) {
+        if ( Object.keys(result).length !== 0 ) {
+            skyObjectList = result;
+        } 
     })
     .catch(function(e) {
         console.log( e.code );
@@ -471,11 +891,189 @@ let ControlPane = {
     }
 };
 
+let SaveCalibration = function() {
+    m.request({
+        method: "POST",
+        url: "save_calibration",
+        body: calibrationState
+    })
+    .then(function(result) {
+        if ( result.response != "OK") {
+            alert("Submit failed");
+        }
+    })
+    .catch(function(e) {
+        console.log( e.code );
+    })
+};
+
+let CalibrationPane = {
+    view: function() {
+        return m("form.control-container", {
+            onsubmit: function(e) {e.preventDefault(), SaveCalibration() }
+        }, [
+            m("div.citem-left", "Camera Latitude"),
+            m("input.input[type=number,step='any']",{onchange:function(e){calibrationState.cameraLatitude=Number(e.target.value)},value: calibrationState.cameraLatitude}),
+            m("div.citem-left", "Camera Longitude"),
+            m("input.input[type=number,step='any']",{onchange:function(e){calibrationState.cameraLongitude=Number(e.target.value)},value: calibrationState.cameraLongitude}),
+            m("div.citem-left", "Camera Elevation (m)"),
+            m("input.input[type=number,step='any']",{onchange:function(e){calibrationState.cameraElevation=Number(e.target.value)},value: calibrationState.cameraElevation}),
+            m("div.citem-left", "COPx"),
+            m("input.input[type=number,step='any']",{onchange:function(e){calibrationState.COPx=Number(e.target.value)},value: calibrationState.COPx}),
+            m("div.citem-left", "COPy"),
+            m("input.input[type=number,step='any']",{onchange:function(e){calibrationState.COPy=Number(e.target.value)},value: calibrationState.COPy}),
+            m("div.citem-left", "a0"),
+            m("input.input[type=number,step='any']",{onchange:function(e){calibrationState.a0=Number(e.target.value)},value: calibrationState.a0}),
+            m("div.citem-left", "V"),
+            m("input.input[type=number,step='any']",{onchange:function(e){calibrationState.V=Number(e.target.value)},value: calibrationState.V}),
+            m("div.citem-left", "S"),
+            m("input.input[type=number,step='any']",{onchange:function(e){calibrationState.S=Number(e.target.value)},value: calibrationState.S}),
+            m("div.citem-left", "D"),
+            m("input.input[type=number,step='any']",{onchange:function(e){calibrationState.D=Number(e.target.value)},value: calibrationState.D}),
+            m("div.citem-left", "E"),
+            m("input.input[type=number,step='any']",{onchange:function(e){calibrationState.E=Number(e.target.value)},value: calibrationState.E}),
+            m("div.citem-left", "eps"),
+            m("input.input[type=number,step='any']",{onchange:function(e){calibrationState.eps=Number(e.target.value)},value: calibrationState.eps}),
+            m("div.citem-left", "alpha"),
+            m("input.input[type=number,step='any']",{onchange:function(e){calibrationState.alpha=Number(e.target.value)},value: calibrationState.alpha}),
+            m("div.citem-left", "flat"),
+            m("input.input[type=number,step='any']",{onchange:function(e){calibrationState.flat=Number(e.target.value)},value: calibrationState.flat}),
+
+            m("button.pure-button.citem-submit[type=submit]", "Save Calibration")
+        ])
+    }
+};
+
 let ControlStuff = {
     view: function() {
         return m("div.form-container", [
             m("button.pure-button", {onclick: RequestControls}, "Request Update"),
             m(ControlPane)
+        ]);
+    }
+};
+
+let DrawLandmarks = function() {
+    if ( canvasContext === null ){
+        return;
+    }
+
+    canvasContext.fillStyle = "red";
+    canvasContext.strokeStyle = "red";
+    canvasContext.font = "20px Georgia";
+
+    landmarks.forEach( function(item){
+        if ( item.circle ) {
+            canvasContext.beginPath();
+            canvasContext.arc(item.px, item.py, 10, 0, 2 * Math.PI);
+            canvasContext.stroke()
+        
+            canvasContext.fillText(item.name, item.px+12, item.py+5);    
+        } else {
+            canvasContext.beginPath();
+            canvasContext.arc(item.px, item.py, 5, 0, 2 * Math.PI);
+            canvasContext.fill()
+        
+            canvasContext.fillText(item.name, item.px+8, item.py+5);
+        }
+    })
+};
+
+let Transform = function( azElObject ) {
+    let result = {};
+    result.name = azElObject.name;
+    result.circle = azElObject.circle;
+    result.azim = azElObject.azim;
+    result.elev = azElObject.elev;
+
+    var temp = DegToRad( azElObject.azim, azElObject.elev );
+    temp = AzElToPixel( temp.azim, temp.elev );
+
+    result.px = temp.px;
+    result.py = temp.py;
+
+    return result;
+}
+
+let UpdateStars = function() {
+    canvasContext.clearRect(0,0,1920,1080);
+    canvasContext.drawImage(canvasImage,0,0);
+    CalculateAffines();
+
+    let directions = [
+        {name: "N", azim:   0.0, elev:  0.0, circle: false },
+        {name: "E", azim:  90.0, elev:  0.0, circle: false },
+        {name: "S", azim: 180.0, elev:  0.0, circle: false },
+        {name: "W", azim: 270.0, elev:  0.0, circle: false },
+        {name: "Z", azim:   0.0, elev: 90.0, circle: false }
+    ];
+
+    let starRequest = {
+        path: videoSource,
+        cameraLatitude: calibrationState.cameraLatitude,
+        cameraLongitude: calibrationState.cameraLongitude,
+        cameraElevation: calibrationState.cameraElevation
+    };
+
+    m.request({
+        method: "POST",
+        url: "stars",
+        body: starRequest
+    })
+    .then(function(result) {
+        if ( result.response === "OK") {
+            var temp = result.sky_objects.map( function(item){
+                item.circle = true;
+                return item;
+            });
+    
+            landmarks = temp.concat(directions).map(Transform);
+            DrawLandmarks();    
+        } else {
+            alert( result.response );
+        }
+    })
+    .catch(function(e) {
+        console.log( e.code );
+    })
+};
+/**
+ * Return the location of the element (x,y) being relative to the document.
+ * 
+ * @param {Element} obj Element to be located
+ */
+let getElementPosition = function(obj) {
+    var curleft = 0, curtop = 0;
+    if (obj.offsetParent) {
+        do {
+            curleft += obj.offsetLeft;
+            curtop += obj.offsetTop;
+        } while (obj = obj.offsetParent);
+        return { x: curleft, y: curtop };
+    }
+    return undefined;
+};
+
+/** 
+ * return the location of the click (or another mouse event) relative to the given element (to increase accuracy).
+ * @param {DOM Object} element A dom element (button,canvas,input etc)
+ * @param {DOM Event} event An event generate by an event listener.
+ */
+let getEventLocation = function(element,event){
+    // Relies on the getElementPosition function.
+    var pos = getElementPosition(element);
+    
+    return {
+    	x: (event.pageX - pos.x),
+      	y: (event.pageY - pos.y)
+    };
+};
+
+let CalibrationStuff = {
+    view: function() {
+        return m("div.form-container", [
+            m(CalibrationPane),
+            m("button.pure-button", {onclick: UpdateStars}, "Update Stars")
         ]);
     }
 };
@@ -503,6 +1101,21 @@ let Layout = {
                 m("div.content",  m(Video)),
                 m("div.footer",   eventTimeString),
                 m("div.controls", m(PlaybackPane))
+            ]);
+        } else if ( paneSelect === "calibrate" ) {
+            return m("div.grid-container", {onclick: CheckDropdown}, [
+                m(DoHeader),
+                m("div.content",  m(CalibrateImage)),
+                m("div.footer",   eventTimeString),
+                m("div.controls", m(CalibrationStuff))
+            ]);
+        } else if ( paneSelect === "stars" ) {
+            return m("div.grid-container", {onclick: CheckDropdown}, [
+                m(DoHeader),
+                m("div.content",  m(CalibrateImage)),
+                m("div.footer",   eventTimeString),
+                m("div.controls", m(DoSkyTable)),
+                m("div.stable",   m(SkyTable))
             ]);
         }
     }
