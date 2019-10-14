@@ -9,17 +9,23 @@ The Pi Sentinel software requires the following external programs and libraries:
 ```
 sudo apt-get install git
 sudo apt-get install gpac
+sudo apt-get install libatlas-base
 sudo apt-get install python3-pip
 sudo pip3 install cherrypy
+sudo pip3 install pyephem
 ```
 
 The `git` install allows us to access the github repository.
 
 The `gpac` install provides the utility program (MP4Box) used to convert .h264 formatted files to .mp4.
 
+The `libatlas-base` install provides numerical libraries used to for star ephemeris calculations. 
+
 The `python3-pip` install gives us pip3, which is needed for the next install.
 
 The `cherrypy` install provides the Python web server used for the graphical interface.
+
+The `pyephem` install provides routines for calculating star positions used for calibration.
 
 ## Hardware 
 
@@ -65,13 +71,13 @@ Now open your web browser and connect to the IP address of your Raspberry Pi usi
 
 The Pi-Sentinel software provides a web interface which allows the user to control the software and view events with just a web browser.  I am currently using Firefox on a Mac, which is on the same WiFi network as the Raspberry Pi.
 
-The interface consists of an image/video panel on the right and a control panel on the left.  The image panel is where event videos and images are shown.  The control panel lets you control the Pi Sentinel software and examine events produced by Pi Sentinel.  The control panel is made up of three panes that you can view one at a time.  The first pane (Control) lets you control various aspects of the software and view status information.  The second pane (Events) lets you see all the events captured by Pi Sentinel and select each event for examination.  The third pane (Playback) lets you produce an event using the video archive (if present) by specifying a time and duration.  
+The interface consists of an image/video panel on the right and a control panel on the left.  The image panel is where event videos and images are shown.  The control panel lets you control the Pi Sentinel software and examine events produced by Pi Sentinel.  The control panel is made up of five panes that you can view one at a time.  The first pane (Control) lets you control various aspects of the software and view status information.  The second pane (Events) lets you see all the events captured by Pi Sentinel and select each event for examination.  The third pane (Playback) lets you produce an event using the video archive (if present) by specifying a time and duration.  The fourth pane (Cal) lets you view and edit calibration parameters.  The fifth pane (Starlist) lets you collect the position of star images to calibrate the view.
 
 ### Control Pane
 
 ![Control Panel 1](doc/PiSentinelControls1.png)
 
-At the top of the pane is the **Actions** pop-down button, followed by three selection buttons: **Controls**, **Events**, and **Playback**.  This set of four buttons exists at the top of all three panes.  In fact, you use the selection buttons to select which pane is shown.
+At the top of the pane are the five selection buttons: **Controls**, **Events**, and **Playback**, along with the **Actions** pop-down menu button.  This set of six buttons exists at the top of all five panes.  In fact, you use the selection buttons to select which pane is shown.
 
 Next is the **Request Update** button.  Pressing this sends a request to the Pi Sentinel software to update the table (below the **Request Update** button) with the current status and commanded state.  This table has the following items:
 
@@ -99,9 +105,21 @@ Pressing the **Force Trigger** command will cause an event to be immediately gen
 
 Pressing the **Make Composite** command will cause a composite image to be produced from the most recently selected event video.  Because making a composite image uses the same hardware decoder used by Pi Sentinel for normal camera processing, this command is available only when Pi Sentinel is not currently processing data from the camera.  
 
+Pressing the **Analyze** command will instruct the software to produce a CSV file (comma separated variable) that contains a time history of the event, including the time of each video frame, the number of pixels that are above the noise threshold, the sum of the pixel values above the noise threshold, the X and Y coordinates of the centroid of the pixels above the noise threshold, and the calculated azimuth and elevation of this centroid.  Azimuth and elevation calculations depend on accurate calibration parameters so make sure a full calibration is done beforehand.  Like the previous command, this command is available only when Pi Sentinel is not currently processing data from the camera.
+
+Ideally, you should see pixel values above the noise threshold only when a meteor is present.  However, if examining the CVS file shows pixel values above the noise threshold at other times, you should consider raising the **Noise Threshold** value in the **Controls** pane and remaking the CVS file.
+
+Pressing the **Make Star Map** command will instruct the software to produce an image, from the most recently selected event video, that attempts to enhance the background in order to make faint stars visible.  It works by summing all frames from the first half of the video, subtracting an equal number of frames from the second half of the video, and then producing a suitably scaled image from the result.  In theary, all static features and noise accumulated during the first half are cancelled out by subtracting the frames from the second half.  However, if the video is long enough, the stars accumulated during the first half will have moved sufficiently, and so will not be cancelled out when the frames from the second half are subtracted.
+
+In order to make a video long enough for this process to work, it is necessary to produce a Playback video from the video archive, as described in the **Playback** discussion below.  I have found that a playback with a 300 second duration appears to work reasonably well and will produce an image that clearly shows several bright stars and planets.  By making making several such star map images at various times throughout a clear night, it is possible to collect enough calibration reference measurements to permit a full calibration using optimization techniques.  This process is described in the **Starlist** section below.
+
+However, producing a long duration playback is tedious and requires a large amount of memory.  To help with this a script can be used to automate the process.  The Python script `starmap.py` is an example script designed to produce a set of star maps from archive data collected over a single night.  To use it, edit the `start`, `end` and `delta` assignment statements to select the start time, the end time, and the time interval.  At each of the selected times, the script produces a playback video, uses the running Pi Sentinel web program to produce a star map, and then replaces the long duration playback video with a short duration playback video that uses much less memory.
+
 The **Get Video** command is used to fetch the most recently viewed video to local storage, so on my Mac I use this to bring the video file from the Raspberry Pi to my Mac.
 
-The **Get Image** command is used to fetch the most recently viewed composite image to local storage.  Of course, this works only if a composite image has already been produced by the **Make Composite** selection as described above.
+The **Get Image** command is used to fetch the most recently viewed composite image to local storage.  Of course, this works only if a composite image has already been produced by the **Make Composite** selection or the **Make Star Map** as described above.
+
+The **Get CSV File** command is used to fetch the CSV file of the most recently viewed event to local storage.  Of course, this works only if a CSV file has already been produced by the **Analyze** command.
 
 The **Self Test** command initiates a sequence of actions designed to fully test the Pi Sentinel system.  At the beginning of this sequence, processing of camera data is started, then after a period of time, a Force Trigger is initiated, and then, after a period of time, processing of camera data is stopped.  This sequence lasts for about three minutes and is repeated 10 times.  This command is not available if Pi Sentinel is already processing camera data.
 
@@ -127,6 +145,34 @@ If you decide to maintain a video archive, the Playback capability lets you go i
 
 The **Playback** pane lets you specify a start time and a duration in seconds.  For convenience, the start time is initialized to the time of the last event selected.  If the video archive contains video that matches the specified start time and duration, then Pi Sentinel creates a new event and places it in the `new` directory where it can be examined and moved just like any other event.  To distinquish *normal* events from *playback* events, the *playback* event names are shorter since they do not specify time to millisecond resolution. 
 
+### Cal Pane
+
+Press the **Cal** button to select the **Cal Pane** as shown below.
+
+![Events Panel](doc/PiSentinelCal.png)
+
+The **Cal** pane presents all the parameters needed to calibrate the view, that is, to map each point in the image view to a true Azimuth and Elevation, taking into account the positioning of the camera and the distortion of the lens.  To assist in this effort, the calculated positions of the four cardinal directions (N,S,E,W) and the position of the zenith (Z) are indicated in the view area by solid red dots.  Also, the calculated positions of the brightest stars at the time of the last selected event, are indicated in the view by red circles.  The parameters can be edited by hand and then the star positions can be updated by pressing the `Update Stars` button.
+
+The user should enter the Latitude, Longitude, and Altitude of the camera and adjust a few of the parameters by hand to get a rough calibration.  A final calibration will depend on locating and identifying stars at known times as described later.  The parameters that might be adjusted initially by hand include:
+
+- **COPx** and **COPy** These are the pixel coordinates of the Center of projection of the camera image.  
+- **a0** This indicates the rotation of the camera.
+- **V** This indicates magnification of the image.  It is the first-order angular size of each pixel, near the center of the image, in radians per pixel.  
+
+Edited calibration parameters can be saved by pressing the `Save Calibration` button.
+
+## Starlist Pane
+
+Press the **Starlist** button to select the **Starlist Pane** as shown below.
+
+![Events Panel](doc/PiSentinelCal.png)
+
+The **Starlist** pane presents a list of selected star measurements used to perform a calibration. The view shows the image of the most recently selected event, along with markers showing the calculated position of the brightest stars and planets visible at the time of the event.  The event should be one created with the **Make Star Map** command as described earlier.  The calibration parameters may need to be adjusted by hand such that the apparent star position is reasonably close to the calculated star position.  To add a measurement to the list, click on the apparent star position.  The program calculates the centroid of the apparent star position and finds the nearest star.  It then presents a dialog allowing you to approve the star selection whereupon it adds the measurement to the list.  You can add measurements from several events by going back to the **Events** pane, selecting a different event video, and then returning to the **Starlist** pane.  
+
+After enough measurements have been selected, press the `Do Calibration` button.  This sends the measurement data to the Pi Sentinel software, which performs an optimization to find the set of calibration parameters that best fits the measurements.  This set is returned and replaces the calibration parameters displayed in the **Cal** pane.
+
+To see how well the calibration worked, go to the **Events** pane, select one of the events created with the **Make Star Map** command, and return to the **Starlist** or **Cal** pane.  Each apparent star image should be within the circle of its calculated star position.
+
 ## Mask File
 
 The mask file is used to specify areas of the image that should be ignored.  The mask file contains an image of the camera field of view in which the areas to be ignored are painted red.  The image should be scaled to 640 pixels wide and 360 pixels high and be saved as `mask.ppm` (PPM format) in the same directory as `sentinel.py`.  
@@ -137,10 +183,7 @@ The mask file is read by the sentinel program every time it starts.
 
 ## Things Left To Do
 
-* Prune older video archive files to avoid filling up the disk.
-* Get time history text file.
 * Add Empty Trash command
-* Add Long Exposure command to produce an image that can show stars
 
 ## Contact
 
