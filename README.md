@@ -165,7 +165,7 @@ Edited calibration parameters can be saved by pressing the `Save Calibration` bu
 
 Press the **Starlist** button to select the **Starlist Pane** as shown below.
 
-![Events Panel](doc/PiSentinelCal.png)
+![Events Panel](doc/PiSentinelStarlist.png)
 
 The **Starlist** pane presents a list of selected star measurements used to perform a calibration. The view shows the image of the most recently selected event, along with markers showing the calculated position of the brightest stars and planets visible at the time of the event.  The event should be one created with the **Make Star Map** command as described earlier.  The calibration parameters may need to be adjusted by hand such that the apparent star position is reasonably close to the calculated star position.  To add a measurement to the list, click on the apparent star position.  The program calculates the centroid of the apparent star position and finds the nearest star.  It then presents a dialog allowing you to approve the star selection whereupon it adds the measurement to the list.  You can add measurements from several events by going back to the **Events** pane, selecting a different event video, and then returning to the **Starlist** pane.  
 
