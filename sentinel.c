@@ -2372,11 +2372,16 @@ static int ProcessAnalyzeBuffer( FILE* textFile, FILE* csvFile, double eventTime
     double azim = sum == 0 ? 0 : calibrationParameters.azim;
     double elev = sum == 0 ? 0 : calibrationParameters.elev;
 
+    char buff[255];
+    fgets(buff, 255, textFile );
+
     int    txtCount;
     double timeOffset; 
-    fscanf( textFile, "%d %lf %*d %*d %*f %*f", &txtCount, &timeOffset );
+    sscanf( buff, "%d %lf", &txtCount, &timeOffset );
 
     double ftime = eventTime+timeOffset;
+    // fprintf( stderr, "ftime: %f offset: %f\n", ftime, timeOffset );
+
     time_t dtime = ftime;
 
     int millisec = (ftime-dtime)*1000;

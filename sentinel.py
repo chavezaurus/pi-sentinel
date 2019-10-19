@@ -384,8 +384,8 @@ class SentinelServer(object):
                     os.rename( fromPath+".txt",  toPath+".txt")
                 if os.path.exists( fromPath+".jpg"):
                     os.rename( fromPath+".jpg", toPath+".jpg" )
-                if os.path.exists( fromPath+"m.jpeg"):
-                    os.rename( fromPath+"m.jpeg", toPath+"m.jpg")
+                if os.path.exists( fromPath+"m.jpg"):
+                    os.rename( fromPath+"m.jpg", toPath+"m.jpg")
                 if os.path.exists( fromPath+".csv"):
                     os.rename( fromPath+".csv", toPath+".csv")
 
@@ -697,7 +697,7 @@ class SentinelServer(object):
         starList = [ "Sirius", "Canopus", "Rigil Kentaurus", "Arcturus", "Vega", "Capella", "Rigel", "Procyon",
                      "Achernar", "Betelgeuse", "Hadar", "Altair", "Acrux", "Aldebaran", "Antares", "Spica", "Pollux", "Fomalhaut",
                      "Deneb", "Mimosa", "Regulus", "Adhara", "Shaula", "Castor", "Gacrux" ]
-        planetList = ["Mars", "Venus", "Jupiter", "Saturn"]
+        planetList = ["Mars", "Venus", "Jupiter", "Saturn", "Moon"]
 
         data = cherrypy.request.json
         observer = ephem.Observer()
@@ -747,6 +747,13 @@ class SentinelServer(object):
             azim = saturn.az*180.0/pi
             elev = saturn.alt*180.0/pi
             result.append( {"name": "Saturn", "azim": azim, "elev": elev} )
+
+        moon = ephem.Moon(date)
+        moon.compute(observer)
+        if moon.alt > 0.0:
+            azim = moon.az*180.0/pi
+            elev = moon.alt*180.0/pi
+            result.append( {"name": "Moon", "azim": azim, "elev": elev} )
 
         return { "response": "OK", "sky_objects": result }
 
