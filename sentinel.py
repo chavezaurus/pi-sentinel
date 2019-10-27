@@ -576,6 +576,21 @@ class SentinelServer(object):
     @cherrypy.tools.json_out()
     def analyze(self):
         data = cherrypy.request.json
+        moonx = 0
+        moony = 0
+
+        if "Moon" in data:
+            moonx = data["Moon"][0]
+            moony = data["Moon"][1]
+
+        r = self.funnelCmd("set_moon_x %d" % moonx )
+        if r["response"] != "OK":
+            return r
+
+        r = self.funnelCmd("set_moon_y %d" % moony )
+        if r["response"] != "OK":
+            return r
+
         path = data["path"]
         r = self.funnelCmd("analyze %s" % data["path"])
         return r

@@ -102,6 +102,8 @@ static int triggerCounter;
 static int untriggerCounter;
 static int sumThreshold = 175;
 static int starMovieFrameCount = 0;
+static int moonx = 0;
+static int moony = 0;
 
 static int eventDuration;
 static unsigned int eventTimeStamp_hi;
@@ -2572,6 +2574,17 @@ static void analyzeLoop1( const char* path )
 
             averageBuffer[index] /= frameCount;
             averageBuffer[index] += maskFrame[indexMask];
+
+            if ( moonx != 0 && moony != 0 )
+            {
+                int dx = ix - moonx;
+                int dy = iy - moony;
+
+                int dsq = dx*dx + dy+dy;
+
+                if ( dsq < 400 )
+                    averageBuffer[index] += 255;
+            }
         }
     }
 
@@ -3102,6 +3115,18 @@ static void runInteractiveLoop( int mum )
         {
             token = strtok(NULL," \n\t\r");
             starMovieFrameCount = strtol(token, NULL, 0);
+            printf( "=OK\n");
+        }
+        else if (!strcmp(token,"set_moon_x"))
+        {
+            token = strtok(NULL," \n\t\r");
+            moonx = strtol(token, NULL, 0);
+            printf( "=OK\n");
+        }
+        else if (!strcmp(token,"set_moon_y"))
+        {
+            token = strtok(NULL," \n\t\r");
+            moony = strtol(token, NULL, 0);
             printf( "=OK\n");
         }
         else if (!strcmp(token,"set_noise"))

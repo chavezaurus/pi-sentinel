@@ -464,11 +464,18 @@ let Analyze = function() {
     }
 
     let path = videoSource.replace(".mp4", ".h264");
+    var obj = {"path": path};
+
+    for ( var item of landmarks ) {
+        if ( item.name === "Moon" ) {
+            obj["Moon"] = [ item.px, item.py ];
+        }
+    };
 
     m.request({
         method: "POST",
         url: "analyze",
-        body: {"path": path }
+        body: obj
     })
     .then( function(result) {
         if ( result.response !== "OK") {
@@ -521,6 +528,8 @@ let ClickTable = function(e) {
             CheckForPoster( posterTest );
             CheckForCSV( csvTest );
         }
+
+        landmarks = [];
 
         let dateString = rowObj.event.substring(1,16);
         let year = Number(dateString.substring(0,4));
