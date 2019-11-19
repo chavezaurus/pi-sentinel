@@ -185,7 +185,7 @@ class SentinelServer(object):
             return
 
         response = self.funnelCmd("get_frame_rate")
-        if float(response["response"]) < 19.0:
+        if float(response["response"]) < 17.0:
             print("Fixed exposure at: ", strftime("%Y-%m-%d %H:%M:%S", localtime()))
             run(['v4l2-ctl', '-d', self.devName, '-c', 'exposure_auto=1'])
             run(['v4l2-ctl', '-d', self.devName, '-c', 'exposure_absolute=333'])

@@ -1152,9 +1152,9 @@ static void ProcessDecodedBuffer(OMX_BUFFERHEADERTYPE *workingBuffer)
     while (pTest < pvend)
     {
         int n = *pRef;
-        n *= 7;
+        n *= 15;
         n += *pTest++;
-        n >>= 3;
+        n >>= 4;
 
         *pRef++ = n;
     }
@@ -2313,10 +2313,10 @@ void CalibrationFunction( void )
     azim *= 180.0 / M_PI;
     elev *= 180.0 / M_PI;
 
-    while ( azim > 180.0 )
+    while ( azim >= 360.0 )
         azim -= 360.0;
 
-    while ( azim <= -180.0 )
+    while ( azim < 0.0 )
         azim += 360.0;
 
     calibrationParameters.azim = azim;
