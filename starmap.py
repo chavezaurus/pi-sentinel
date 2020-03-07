@@ -8,8 +8,8 @@ from os import remove
 def process():
     mountain = timezone("US/Mountain")
     utc = timezone("UTC")
-    start = mountain.localize( datetime(2019,9,4,21,0,0))
-    end   = start + timedelta(hours=8)
+    start = mountain.localize( datetime(2020,2,25,22,0,0))
+    end   = start + timedelta(hours=6)
     delta = timedelta(minutes=60)
 
     headers = {'Content-type': 'application/json'}

@@ -189,6 +189,7 @@ class SentinelServer(object):
             print("Fixed exposure at: ", strftime("%Y-%m-%d %H:%M:%S", localtime()))
             run(['v4l2-ctl', '-d', self.devName, '-c', 'exposure_auto=1'])
             run(['v4l2-ctl', '-d', self.devName, '-c', 'exposure_absolute=333'])
+            run(['v4l2-ctl', '-d', self.devName, '-c', 'gain=0'])
             return
 
         response = self.funnelCmd("get_zenith_amplitude")
@@ -294,6 +295,18 @@ class SentinelServer(object):
             except:
                 pass
 
+    def GPS_Process(self):
+        while cherrypy.engine.state != cherrypy.engine.states.STARTED:
+            time.sleep(1)
+
+        self.gpsProcess = Popen(['python3', './gpsparse.py'], stdin=None, stdout=PIPE, shell=False, universal_newlines=True)
+        print(self.gpsProcess)
+
+        for line in iter(self.gpsProcess.stdout.readline,''):
+
+            items = line.split()
+            print( items )
+
     def funnelCmd( self, cmd ):
         responseQueue = Queue()
         self.cmdQueue.put( {"cmd": cmd, "queue": responseQueue})
@@ -312,7 +325,10 @@ class SentinelServer(object):
         background.start()
         comm = Thread(target = self.commProcess)
         comm.daemon = True
-        comm.start()            
+        comm.start()
+        gps = Thread(target = self.GPS_Process)
+        gps.daemon = True
+        gps.start()
 
     def testThread(self):
         for i in range(10):
