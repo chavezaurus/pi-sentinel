@@ -111,9 +111,11 @@ static unsigned int eventTimeStamp_lo;
 static int rateLimitLastSecond;
 static int rateLimitBank;
 static int rateLimitEventsPerHour = 5;
+static int latencyMillisecs = 0;
 
 static double frameRate = 30.0;
 static double zenithAmplitude = 0.0;
+static double gpsOffset = 0.0;
 
 static FILE *videoFile;
 static FILE *textFile;
@@ -650,6 +652,8 @@ static int archiveFrame( void )
         oldMinute = minute;
     }
 
+    int firstFrame = 0;
+
     if ( videoArchive == 0 )
     {
         int hour = minute / 60;
@@ -672,13 +676,19 @@ static int archiveFrame( void )
             return -1;
 
         epochTimeShift = getEpochTimeShift();
+
+        firstFrame = 1;
     }
 
     int count = fwrite( p, size, 1, videoArchive );
     if ( count != 1 )
         return -1;
 
-    count = fprintf( textArchive, "%12.3f %6d\n", timelong, size );
+    if ( firstFrame == 1 )
+        count = fprintf( textArchive, "%12.3f %6d %7.3f\n", timelong, size, gpsOffset );
+    else
+        count = fprintf( textArchive, "%12.3f %6d\n", timelong, size );
+    
     if ( count == 0 )
         return -1;
 
@@ -880,8 +890,13 @@ static void saveEventJob(void)
         int sum = sumBuffers[sumIndex];
         xCentroid = (sum == 0) ? xCentroid : (double)xSumBuffers[sumIndex] / sum;
         yCentroid = (sum == 0) ? yCentroid : (double)ySumBuffers[sumIndex] / sum;
-        fprintf(textFile, "%3d %7.3f %6d %6d %7.1f %7.1f\n",
-                ++frameCount, delta, counts, sum, xCentroid, yCentroid);
+
+        if ( frameCount == 0 )
+            fprintf(textFile, "%3d %7.3f %6d %6d %7.1f %7.1f %7.3f\n", // Save GPS time offset on first line
+                    ++frameCount, delta, counts, sum, xCentroid, yCentroid, gpsOffset);
+        else
+            fprintf(textFile, "%3d %7.3f %6d %6d %7.1f %7.1f\n",
+                    ++frameCount, delta, counts, sum, xCentroid, yCentroid);
 
         fwrite(frameBuffers[frameIndex], frameSizes[frameIndex], 1, videoFile);
         frameIndex = (frameIndex + 1) % FRAMES_TO_KEEP;
@@ -2327,6 +2342,8 @@ static int ProcessAnalyzeBuffer( FILE* textFile, FILE* csvFile, double eventTime
 {
     struct tm * ptm;
 
+    static double gpsTimeOffset = 0.0;
+
     if (outputBuffer == 0)
         return 0;
 
@@ -2379,10 +2396,22 @@ static int ProcessAnalyzeBuffer( FILE* textFile, FILE* csvFile, double eventTime
 
     int    txtCount;
     double timeOffset; 
-    sscanf( buff, "%d %lf", &txtCount, &timeOffset );
 
-    double ftime = eventTime+timeOffset;
-    // fprintf( stderr, "ftime: %f offset: %f\n", ftime, timeOffset );
+    double param3;
+    double param4;
+    double param5;
+    double param6;
+    double param7;
+    int paramCount = sscanf( buff, "%d %lf %lf %lf %lf %lf %lf", &txtCount, &timeOffset, &param3, &param4, &param5, &param6, &param7 );
+
+    // Check if file has GPS time offset field
+    if ( paramCount == 3 )
+      gpsTimeOffset = param3;
+    else if ( paramCount == 7 )
+      gpsTimeOffset = param7;
+
+    double ftime = eventTime+timeOffset-gpsTimeOffset-0.001*latencyMillisecs;
+    // fprintf( stderr, "ftime: %f offset: %f gpsTimeOffset: %f\n", ftime, timeOffset, gpsTimeOffset );
 
     time_t dtime = ftime;
 
@@ -3173,6 +3202,12 @@ static void runInteractiveLoop( int mum )
             strcpy(archive_path, token);
             printf( "=OK\n");
         }
+        else if (!strcmp(token,"set_gps_time_offset"))
+        {
+            token = strtok(NULL," \n\t\r");
+            gpsOffset = strtod(token,NULL);
+            printf( "=OK\n");
+        }
         else if (!strcmp(token,"get_archive_path"))
         {
             printf( "=%s\n", archive_path );
@@ -3190,6 +3225,17 @@ static void runInteractiveLoop( int mum )
         else if (!strcmp(token,"get_max_events_per_hour"))
         {
             printf("=%d\n", rateLimitEventsPerHour);
+        }
+        else if (!strcmp(token,"set_latency_millisecs"))
+        {
+            token = strtok(NULL," \n\t\r");
+            int test = strtol(token, NULL, 0);
+            latencyMillisecs = test;
+            printf( "=OK\n" );
+        }
+        else if (!strcmp(token,"get_latency_millisecs"))
+        {
+            printf("=%d\n", latencyMillisecs);
         }
         else if (!strcmp(token,"get_frame_rate"))
         {

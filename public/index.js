@@ -17,6 +17,7 @@ var sentinelState = {
     noiseThreshold: 40,
     sumThreshold: 175,
     eventsPerHour: 5,
+    latencyMillisecs: 0,
     frameRate: 30.0,
     zenithAmplitude: 0.0,
     running: "No",
@@ -24,7 +25,10 @@ var sentinelState = {
     archivePath: "none",
     numNew: 0,
     numSaved: 0,
-    numTrashed: 0
+    numTrashed: 0,
+    gpsLatitude: 0,
+    gpsLongitude: 0,
+    gpsTimeOffset: 0
 };
 
 var playbackState = {
@@ -874,6 +878,15 @@ let ControlPane = {
             m("div.citem-left", "Zenith Amplitude:" ),
             m("div.citem-right", sentinelState.zenithAmplitude ),
 
+            m("div.citem-left", "GPS Latitude:" ),
+            m("div.citem-right", sentinelState.gpsLatitude ),
+
+            m("div.citem-left", "GPS Longitude:" ),
+            m("div.citem-right", sentinelState.gpsLongitude ),
+
+            m("div.citem-left", "GPS Time Offset:" ),
+            m("div.citem-right", sentinelState.gpsTimeOffset ),
+
             m("div.citem-left", "Auto Start Time:"), 
             m("div.citem-right", m(TimePicker, {time: sentinelState.startTime, increment: 5})),
 
@@ -888,6 +901,9 @@ let ControlPane = {
 
             m("label.citem-left", "Max Events Per Hour:"),
             m("input.input[type=number]",{oninput:function(e){sentinelState.eventsPerHour=Number(e.target.value)},value: sentinelState.eventsPerHour}),
+
+            m("label.citem-left", "Latency Millisecs:"),
+            m("input.input[type=number]",{oninput:function(e){sentinelState.latencyMillisecs=Number(e.target.value)},value: sentinelState.latencyMillisecs}),
 
             m("label.citem-left", "Camera Device:"),
             m("input.input[type=text]",{oninput:function(e){sentinelState.devName=e.target.value},value: sentinelState.devName}),

@@ -1,4 +1,5 @@
 import serial
+import sys
 from datetime import datetime
 
 port = "/dev/ttyACM0"
@@ -12,7 +13,7 @@ def parseGPS(data):
     if data[0:6] == '$GPRMC':
         sdata = data.split(",")
         if sdata[2] == 'V':
-            print( "no satellite data available", file=stderr, flush=True )
+            print( "no satellite data available", file=sys.stderr, flush=True )
             return
         # print( "---Parsing GPRMC---", )
         hour = int(sdata[1][0:2])
@@ -28,7 +29,6 @@ def parseGPS(data):
         difference = now - measured
         delta = 0.98*delta + 0.02*difference.total_seconds()
         
-        #print( "%4d/%02d/%02d %02d:%02d:%02d.%02d" % (year,month,day,hour,minute,second,hundredths) )
         time = sdata[1][0:2] + ":" + sdata[1][2:4] + ":" + sdata[1][4:6]
         lat = decode(sdata[3],sdata[4]) #latitude
         lon = decode(sdata[5],sdata[6]) #longitute
@@ -37,7 +37,7 @@ def parseGPS(data):
         date = sdata[9][0:2] + "/" + sdata[9][2:4] + "/" + sdata[9][4:6]#date
  
         if minute != lastminute:
-            print(now,"%7.3f" % delta, " lat: %7.4f, lon: %7.4f" %  (lat,lon), flush=True )
+            print(now,"%7.3f %7.4f %7.4f" %  (delta, lat,lon), flush=True )
             lastminute = minute
 
 def decode(coord,direction):
@@ -52,7 +52,7 @@ def decode(coord,direction):
 
     return magnitude
 
-print( "Receiving GPS data" )
+print( "Receiving GPS data", file=sys.stderr )
 ser = serial.Serial(port, baudrate = 9600, timeout = 0.5)
 while True:
     data = ser.readline()

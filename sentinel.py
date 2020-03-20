@@ -140,6 +140,9 @@ class SentinelServer(object):
         self.devName = "/dev/video2"
         self.archivePath = "none"
         self.maxPercentUsage = 90.0
+        self.gps_latitude = 0.0
+        self.gps_longitude = 0.0
+        self.gps_time_offset = 0.0
 
         if not os.path.exists("new"):
             os.mkdir("new")
@@ -300,12 +303,18 @@ class SentinelServer(object):
             time.sleep(1)
 
         self.gpsProcess = Popen(['python3', './gpsparse.py'], stdin=None, stdout=PIPE, shell=False, universal_newlines=True)
-        print(self.gpsProcess)
 
-        for line in iter(self.gpsProcess.stdout.readline,''):
+        while cherrypy.engine.state == cherrypy.engine.states.STARTED:
+            line = self.gpsProcess.stdout.readline()
+            if not line:
+                continue
 
             items = line.split()
-            print( items )
+            self.gps_latitude = float(items[3])
+            self.gps_longitude = float(items[4])
+            self.gps_time_offset = float(items[2])
+            self.funnelCmd("set_gps_time_offset %7.3f" % self.gps_time_offset)
+            print(line,end='')
 
     def funnelCmd( self, cmd ):
         responseQueue = Queue()
@@ -457,6 +466,8 @@ class SentinelServer(object):
             response["sumThreshold"] = int(r["response"])
             r = self.funnelCmd("get_max_events_per_hour")
             response["eventsPerHour"] = int(r["response"])
+            r = self.funnelCmd("get_latency_millisecs")
+            response["latencyMillisecs"] = int(r["response"])
             r = self.funnelCmd("get_running")
             response["running"] = r["response"]
             r = self.funnelCmd("get_dev_name")
@@ -468,6 +479,9 @@ class SentinelServer(object):
             response["numNew"]     = len(glob.glob("new/*.mp4"))
             response["numSaved"]   = len(glob.glob("saved/*.mp4"))
             response["numTrashed"] = len(glob.glob("trash/*.mp4"))
+            response["gpsLatitude"] = self.gps_latitude
+            response["gpsLongitude"] = self.gps_longitude
+            response["gpsTimeOffset"] = self.gps_time_offset
             self.devName = response["devName"]
         except Exception as inst:
             print(inst)
@@ -483,6 +497,9 @@ class SentinelServer(object):
         if r["response"] != "OK":
             return r
         r = self.funnelCmd("set_max_events_per_hour %d" % data["eventsPerHour"])
+        if r["response"] != "OK":
+            return r
+        r = self.funnelCmd("set_latency_millisecs %d" % data["latencyMillisecs"])
         if r["response"] != "OK":
             return r
         r = self.funnelCmd("set_dev_name %s" % data["devName"])
@@ -663,6 +680,7 @@ class SentinelServer(object):
         count = 0
         firstFrameTime = 0.0
         lastFrameTime = 0.0
+        gpsTimeOffset = 0.0
 
         for path in l:
             fv = open(path,"rb")
@@ -678,6 +696,10 @@ class SentinelServer(object):
                 items = line.split()
                 ftime = float(items[0])
                 fsize = int(items[1])
+
+                # GPS Time offset should be the third item on the first line of the archive text file
+                if len(items) == 3:
+                    gpsTimeOffset = float(items[2])
 
                 if ftime > tp:
                     break
@@ -697,10 +719,13 @@ class SentinelServer(object):
 
                 count = count+1
                 pbv.write(frame)
-                pbt.write("%3d %7.3f\n" % (count,ftime-t0))
-
                 if count == 1:
+                    # Make GPS Time offset the third item on the first line of the event text file
+                    pbt.write("%3d %7.3f %7.3f\n" % (count,ftime-t0,gpsTimeOffset))
                     firstFrameTime = ftime
+                else:
+                    pbt.write("%3d %7.3f\n" % (count,ftime-t0))
+
                 lastFrameTime = ftime
 
             fv.close()
