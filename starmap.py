@@ -8,7 +8,7 @@ from os import remove
 def process():
     mountain = timezone("US/Mountain")
     utc = timezone("UTC")
-    start = mountain.localize( datetime(2020,2,25,22,0,0))
+    start = mountain.localize( datetime(2020,7,29,22,0,0))
     end   = start + timedelta(hours=6)
     delta = timedelta(minutes=60)
 

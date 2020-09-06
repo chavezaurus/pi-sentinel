@@ -2620,6 +2620,24 @@ static void analyzeLoop1( const char* path )
     fclose(file);
 }
 
+static int countLines( const char* path )
+{
+    FILE *file = fopen(path, "rb");
+    if (file == 0)
+        return 0;
+
+    char buff[255];
+
+    int count = 0;
+    
+    while ( fgets(buff, 255, file ) != NULL )
+        ++count;
+
+    fclose(file);
+
+    return count;
+}
+
 static void analyzeLoop2( const char* path )
 {
     OMX_ERRORTYPE error = OMX_ErrorNone;
@@ -2658,11 +2676,19 @@ static void analyzeLoop2( const char* path )
     if (file == 0)
         return;
 
+    // We are going to read part of this file again to flush out the buffer
+    FILE *fileAgain = fopen(tpath, "rb");
+    if (fileAgain == 0)
+        return;
+
     char *pDot = strrchr(tpath, '.');
     if (pDot)
         strcpy(pDot, ".txt");
     else
         strcat(tpath, ".txt");
+
+    int totalFrames = countLines(tpath);
+    fprintf( stderr, "Total Frames: %d\n", totalFrames);
 
     FILE *textFile = fopen(tpath,"r");
     if (textFile == 0)
@@ -2688,7 +2714,7 @@ static void analyzeLoop2( const char* path )
 
     ReadCalibrationParameters();
 
-    while (count > 0)
+    while (frameCount < totalFrames)
     {
         frameCount += ProcessAnalyzeBuffer( textFile, csvFile, ftime );
 
@@ -2718,6 +2744,16 @@ static void analyzeLoop2( const char* path )
         pthread_mutex_unlock(&composeBufferThreadMutex);
 
         count = fread(buffer, 1, 4096, file);
+
+        if ( count == 0 )
+        {
+            if ( fileAgain == 0 )
+                break;
+
+            fclose(file);
+            file = fileAgain;
+            fileAgain = 0;
+        }
     }
 
     fclose(file);
