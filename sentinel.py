@@ -790,6 +790,13 @@ class SentinelServer(object):
             elev = mars.alt*180.0/pi
             result.append( {"name": "Mars", "azim": azim, "elev": elev} )
 
+        venus = ephem.Venus(date)
+        venus.compute(observer)
+        if venus.alt > 0.0:
+            azim = venus.az*180.0/pi
+            elev = venus.alt*180.0/pi
+            result.append( {"name": "Venus", "azim": azim, "elev": elev} )
+
         jupiter = ephem.Jupiter(date)
         jupiter.compute(observer)
         if jupiter.alt > 0.0:
