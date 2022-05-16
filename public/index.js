@@ -17,11 +17,9 @@ var sentinelState = {
     noiseThreshold: 40,
     sumThreshold: 175,
     eventsPerHour: 5,
-    latencyMillisecs: 0,
     frameRate: 30.0,
     zenithAmplitude: 0.0,
     running: "No",
-    devName: "/dev/video2",
     archivePath: "none",
     numNew: 0,
     numSaved: 0,
@@ -901,12 +899,6 @@ let ControlPane = {
 
             m("label.citem-left", "Max Events Per Hour:"),
             m("input.input[type=number]",{oninput:function(e){sentinelState.eventsPerHour=Number(e.target.value)},value: sentinelState.eventsPerHour}),
-
-            m("label.citem-left", "Latency Millisecs:"),
-            m("input.input[type=number]",{oninput:function(e){sentinelState.latencyMillisecs=Number(e.target.value)},value: sentinelState.latencyMillisecs}),
-
-            m("label.citem-left", "Camera Device:"),
-            m("input.input[type=text]",{oninput:function(e){sentinelState.devName=e.target.value},value: sentinelState.devName}),
 
             m("label.citem-left", "Archive Path:"),
             m("input.input[type=text]",{oninput:function(e){sentinelState.archivePath=e.target.value},value: sentinelState.archivePath}),

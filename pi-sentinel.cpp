@@ -1348,7 +1348,7 @@ void SentinelCamera::eventThread()
 		{
 			// Open file
 			string timeString = dateTimeString( tempTime );
-			std::filesystem::path videoPath = "new/s";
+			std::filesystem::path videoPath = "../new/s";
 			videoPath.concat( timeString );
 			videoPath.concat( ".h264" );
 			std::filesystem::path textPath = videoPath;
@@ -1795,6 +1795,8 @@ void runInteractive( bool mum )
 		string line;
 		std::getline( std::cin, line );
 
+		std::cerr << line << std::endl;
+
 		std::istringstream iss(line);
 		std::string cmd;
 
@@ -1809,6 +1811,16 @@ void runInteractive( bool mum )
 
 		if ( cmd == "get_running" )
 			std::cout << (running ? "=Yes" : "=No") << std::endl;
+		else if ( cmd == "get_frame_rate" )
+			std::cout << "=0" << std::endl;
+		else if ( cmd == "get_zenith_amplitude" )
+			std::cout << "=0" << std::endl;
+		else if ( cmd == "get_noise" )
+			std::cout << "=" << sentinelCamera.noise_level << std::endl;
+		else if ( cmd == "get_sum_threshold" )
+			std::cout << "=" << sentinelCamera.sumThreshold << std::endl;
+		else if ( cmd == "get_max_events_per_hour" )
+			std::cout << "=" << sentinelCamera.max_events_per_hour << std::endl;
 		else if ( cmd == "start" )
 		{
 			if ( running )

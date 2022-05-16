@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import cherrypy
 import os, os.path
 import time
@@ -137,7 +139,6 @@ class SentinelServer(object):
         self.cmdQueue = Queue()
         self.startTime = "21:30"
         self.stopTime  = "05:00"
-        self.devName = "/dev/video2"
         self.archivePath = "none"
         self.maxPercentUsage = 90.0
         self.gps_latitude = 0.0
@@ -166,8 +167,6 @@ class SentinelServer(object):
         if response["response"] == "No":
             return
             
-        print("Auto exposure at: ", strftime("%Y-%m-%d %H:%M:%S", localtime()))
-        run(['v4l2-ctl', '-d', self.devName, '-c', 'exposure_auto=3'])
         response = self.funnelCmd("stop")
         if response["response"] != "OK":
             print("Stop failed")
@@ -181,24 +180,6 @@ class SentinelServer(object):
             self.runStartSequence()
         else:
             print("Toggle Start/Stop failed")
-
-    def checkExposure(self):
-        response = self.funnelCmd("get_running")
-        if response["response"] != "Yes":
-            return
-
-        response = self.funnelCmd("get_frame_rate")
-        if float(response["response"]) < 17.0:
-            print("Fixed exposure at: ", strftime("%Y-%m-%d %H:%M:%S", localtime()))
-            run(['v4l2-ctl', '-d', self.devName, '-c', 'exposure_auto=1'])
-            run(['v4l2-ctl', '-d', self.devName, '-c', 'exposure_absolute=333'])
-            run(['v4l2-ctl', '-d', self.devName, '-c', 'gain=0'])
-            return
-
-        response = self.funnelCmd("get_zenith_amplitude")
-        if float(response["response"]) > 230.0:
-            print("Auto exposure at: ", strftime("%Y-%m-%d %H:%M:%S", localtime()))
-            run(['v4l2-ctl', '-d', self.devName, '-c', 'exposure_auto=3'])
 
     def handleSentinelCommand(self,obj):
         cmd = obj['cmd']+"\n"
@@ -252,11 +233,13 @@ class SentinelServer(object):
             time.sleep(1)
 
         lastTime = 'XX:XX'
-        f = open("state.json")
-        if f:
+        try:
+            f = open("state.json")
             s = f.read()
             data = json.loads(s)
             self.handle_set_state(data)
+        except:
+            print("state.json does not exist")
 
         while cherrypy.engine.state == cherrypy.engine.states.STARTED:
             #Check for timed actions
@@ -266,8 +249,6 @@ class SentinelServer(object):
                     self.runStartSequence()
                 elif tnow == self.stopTime and self.startTime != self.stopTime:
                     self.runStopSequence()
-                else:
-                    self.checkExposure()
 
                 if self.archivePath != "none":
                     self.pruneArchive()
@@ -326,7 +307,7 @@ class SentinelServer(object):
         return response
         
     def connectToSentinel(self):
-        self.sentinelProcess = Popen(['./sentinel.bin', '-s'], stdin=PIPE, stdout=PIPE, shell=False, universal_newlines=True)
+        self.sentinelProcess = Popen(['./builddir/sentinel', '-s'], stdin=PIPE, stdout=PIPE, shell=False, universal_newlines=True)
         self.y = select.poll()
         self.y.register(self.sentinelProcess.stdout, select.POLLIN|select.POLLERR|select.POLLHUP|select.POLLNVAL)
         background = Thread(target = self.backgroundProcess)
@@ -335,9 +316,9 @@ class SentinelServer(object):
         comm = Thread(target = self.commProcess)
         comm.daemon = True
         comm.start()
-        gps = Thread(target = self.GPS_Process)
-        gps.daemon = True
-        gps.start()
+        # gps = Thread(target = self.GPS_Process)
+        # gps.daemon = True
+        # gps.start()
 
     def testThread(self):
         for i in range(10):
@@ -466,12 +447,8 @@ class SentinelServer(object):
             response["sumThreshold"] = int(r["response"])
             r = self.funnelCmd("get_max_events_per_hour")
             response["eventsPerHour"] = int(r["response"])
-            r = self.funnelCmd("get_latency_millisecs")
-            response["latencyMillisecs"] = int(r["response"])
             r = self.funnelCmd("get_running")
             response["running"] = r["response"]
-            r = self.funnelCmd("get_dev_name")
-            response["devName"] = r["response"]
             r = self.funnelCmd("get_archive_path")
             response["archivePath"] = r["response"]
             response["startTime"] = {"h": int(self.startTime[0:2]), "m": int(self.startTime[3:5])}
@@ -482,7 +459,6 @@ class SentinelServer(object):
             response["gpsLatitude"] = self.gps_latitude
             response["gpsLongitude"] = self.gps_longitude
             response["gpsTimeOffset"] = self.gps_time_offset
-            self.devName = response["devName"]
         except Exception as inst:
             print(inst)
             return {}
@@ -499,12 +475,6 @@ class SentinelServer(object):
         r = self.funnelCmd("set_max_events_per_hour %d" % data["eventsPerHour"])
         if r["response"] != "OK":
             return r
-        r = self.funnelCmd("set_latency_millisecs %d" % data["latencyMillisecs"])
-        if r["response"] != "OK":
-            return r
-        r = self.funnelCmd("set_dev_name %s" % data["devName"])
-        if r["response"] != "OK":
-            return r
         r = self.funnelCmd("set_archive_path %s" % data["archivePath"])
         if r["response"] != "OK":
             return r
@@ -512,7 +482,6 @@ class SentinelServer(object):
         stop = data["stopTime"]
         self.startTime = "%02d:%02d" % (start["h"],start["m"])
         self.stopTime  = "%02d:%02d" % (stop["h"], stop["m"])
-        self.devName = data["devName"]
         self.archivePath = data["archivePath"]
 
     @cherrypy.expose

@@ -13,6 +13,8 @@ sudo apt-get install libatlas-base-dev
 sudo apt-get install python3-pip
 sudo pip3 install cherrypy
 sudo pip3 install pyephem
+sudo pip3 install scipy
+pip3 install --upgrade numpy
 ```
 
 The `git` install allows us to access the github repository.
