@@ -213,7 +213,7 @@ void SentinelCamera::requestComplete(Request* request)
 
 	sc->requestCondition.notify_one();
 
-    // std::cout << "requestComplete" << std::endl;
+    // std::cerr << "requestComplete" << std::endl;
 }
 
 void SentinelCamera::syncTime()
@@ -238,7 +238,7 @@ void SentinelCamera::syncTime()
 		time_offset = tspec4;
 		time_offset_mutex.unlock();
 
-		// std::cout << time_offset.tv_sec << " " << time_offset.tv_nsec << std::endl;
+		// std::cerr << time_offset.tv_sec << " " << time_offset.tv_nsec << std::endl;
 	}
 }
 
@@ -297,7 +297,7 @@ void SentinelCamera::requestThread()
 	    request->reuse(Request::ReuseBuffers);
 	    camera->queueRequest(request);
 
-		// std::cout << "requestThread" << std::endl;
+		// std::cerr << "requestThread" << std::endl;
     }
 }
 
@@ -560,7 +560,7 @@ void SentinelCamera::runDecoder( string videoFilePath, ProcessType process )
 	string textFilePath = videoFilePath;
 	textFilePath.replace( index, 5, ".txt" );
 
-	// std::cout << textFilePath << std::endl;
+	// std::cerr << textFilePath << std::endl;
 
 	std::ifstream textFile;
 	textFile.open( textFilePath.c_str() );
@@ -623,7 +623,7 @@ void SentinelCamera::runDecoder( string videoFilePath, ProcessType process )
 			{
 				timeList.push_back( timeValue );
 
-				// std::cout << frameCount << " " << timeValue << " " << frameSize << std::endl;
+				// std::cerr << frameCount << " " << timeValue << " " << frameSize << std::endl;
 
 				videoFile.read( (char *)coded->mmap, frameSize );
 				coded->plane.bytesused = frameSize;
@@ -1122,7 +1122,7 @@ void SentinelCamera::outputThread()
 			videoPath.concat( minuteString );
 			videoPath.concat( ".h264" );
 
-			std::cout << videoPath << std::endl;
+			std::cerr << videoPath << std::endl;
 
 			std::filesystem::path textPath = videoPath;
 			textPath.replace_extension(".txt");
@@ -1187,7 +1187,7 @@ void SentinelCamera::checkThread()
 		eventQueue.push( frameTime );
 		event_mutex.unlock();
 
-		std::cout << "Initiate trigger at: " << dateTimeString(frameTime) << std::endl;
+		std::cerr << "Initiate trigger at: " << dateTimeString(frameTime) << std::endl;
 	};
 
 	auto terminateTrigger = [&,this](){
@@ -1203,7 +1203,7 @@ void SentinelCamera::checkThread()
 
 		rateLimitBank = std::min(0,rateLimitBank-FRAMES_PER_HOUR/max_events_per_hour);
 
-		std::cout << "Terminate trigger at:" << dateTimeString(frameTime) << std::endl;
+		std::cerr << "Terminate trigger at:" << dateTimeString(frameTime) << std::endl;
 	};
 
 	for (;;)
@@ -1258,6 +1258,7 @@ void SentinelCamera::checkThread()
 			*pRef++ = c;			
 		}
 
+		// std::cerr << (triggered ? 1 : 0) << " " << (untriggered ? 1 : 0) << " " << sumThreshold << " " << sum << std::endl;
 
 		if ( !triggered )
 		{
@@ -1318,6 +1319,10 @@ void SentinelCamera::eventThread()
 	int64_t end_time = 0;
 	bool keyframe_found = false;
 
+	std::filesystem::path videoPath;
+	std::filesystem::path textPath;
+	std::filesystem::path tempPath;
+
 	std::ofstream videoFile;
 	std::ofstream textFile;
 
@@ -1348,11 +1353,13 @@ void SentinelCamera::eventThread()
 		{
 			// Open file
 			string timeString = dateTimeString( tempTime );
-			std::filesystem::path videoPath = "../new/s";
+			videoPath = "new/s";
 			videoPath.concat( timeString );
 			videoPath.concat( ".h264" );
-			std::filesystem::path textPath = videoPath;
+			textPath = videoPath;
 			textPath.replace_extension( ".txt" );
+			tempPath = videoPath;
+			tempPath.replace_extension( ".tmp");
 
 			videoFile.open( videoPath, std::ios::binary );
 			if ( !videoFile.is_open() )
@@ -1372,7 +1379,10 @@ void SentinelCamera::eventThread()
 		{
 			// Close files
 			if ( videoFile.is_open() )
+			{
 				videoFile.close();
+				rename(videoPath.c_str(), tempPath.c_str() );
+			}
 			if ( textFile.is_open() )
 				textFile.close();
 			scan_time = 0;
@@ -1419,7 +1429,7 @@ void SentinelCamera::eventThread()
 				         << " " << dateTime 
 						 << std::setw(7) << sd.size << std::endl;
 
-				// std::cout << frame_count << std::endl;
+				// std::cerr << frame_count << std::endl;
 			}
 
 			scan_time = storageTime+1;
@@ -1555,7 +1565,8 @@ void SentinelCamera::makeComposite( string filePath )
 		return true;
 	};
 
-	memset(composeBuffer,0,1920*1088*3/2);
+	memset(composeBuffer,0,1920*1088);
+	memset(composeBuffer+1920*1088,128,1920*1088/2);
 
 	createDecoder();
 	runDecoder( filePath, fmax );
@@ -1633,11 +1644,11 @@ void SentinelCamera::makeAnalysis( string filePath )
 
 	readMask();
 
-	std::cout << "Create decoder" << std::endl;
+	std::cerr << "Create decoder" << std::endl;
 	createDecoder();
 	runDecoder( filePath, add30 );
 	stopDecoder();
-	std::cout << "Stop decoder" << std::endl;
+	std::cerr << "Stop decoder" << std::endl;
 
     for ( int iy = 0; iy < 1080; ++iy )
     {
@@ -1662,11 +1673,11 @@ void SentinelCamera::makeAnalysis( string filePath )
         }
     }
 
-	std::cout << "Create decoder" << std::endl;
+	std::cerr << "Create decoder" << std::endl;
 	createDecoder();
 	runDecoder( filePath, centroid );
 	stopDecoder();
-	std::cout << "Stop decoder" << std::endl;
+	std::cerr << "Stop decoder" << std::endl;
 
 	delete [] averageBuffer;
 	delete [] maskFrame;
@@ -1785,8 +1796,6 @@ void runInteractive( bool mum )
 
 	for (;;)
 	{
-		bool running = sentinelCamera.running;
-
 		if ( ! mum )
 			std::cout << "cmd: ";
 
@@ -1810,7 +1819,7 @@ void runInteractive( bool mum )
 		}
 
 		if ( cmd == "get_running" )
-			std::cout << (running ? "=Yes" : "=No") << std::endl;
+			std::cout << (sentinelCamera.running ? "=Yes" : "=No") << std::endl;
 		else if ( cmd == "get_frame_rate" )
 			std::cout << "=0" << std::endl;
 		else if ( cmd == "get_zenith_amplitude" )
@@ -1821,9 +1830,11 @@ void runInteractive( bool mum )
 			std::cout << "=" << sentinelCamera.sumThreshold << std::endl;
 		else if ( cmd == "get_max_events_per_hour" )
 			std::cout << "=" << sentinelCamera.max_events_per_hour << std::endl;
+		else if ( cmd == "get_archive_path" )
+			std::cout << "=" << (sentinelCamera.archivePath.empty() ? "none" : sentinelCamera.archivePath ) << std::endl;
 		else if ( cmd == "start" )
 		{
-			if ( running )
+			if ( sentinelCamera.running )
 				sendOK( false );
 			else
 			{
@@ -1833,7 +1844,7 @@ void runInteractive( bool mum )
 		}
 		else if ( cmd == "stop" )
 		{
-			if ( !running )
+			if ( !sentinelCamera.running )
 				sendOK( false );
 			else
 			{
@@ -1843,7 +1854,7 @@ void runInteractive( bool mum )
 		}
 		else if ( cmd == "force_trigger" )
 		{
-			if ( running )
+			if ( sentinelCamera.running )
 			{
 				sentinelCamera.forceEvent();
 				sendOK( true );
@@ -1853,10 +1864,12 @@ void runInteractive( bool mum )
 		}
 		else if ( cmd == "compose" )
 		{
+			std::cout << (sentinelCamera.running ? "=No" : "=OK") << std::endl;
 			string path;
 			if ( iss >> path )
 			{
-				sentinelCamera.makeComposite( path );
+				std::thread t( &SentinelCamera::makeComposite, &sentinelCamera, path );
+    			t.detach();
 				sendOK( true );
 			}
 			else
@@ -1868,7 +1881,8 @@ void runInteractive( bool mum )
 			string path;
 			if ( iss >> path )
 			{
-				sentinelCamera.makeAnalysis( path );
+				std::thread t( &SentinelCamera::makeAnalysis, &sentinelCamera, path );
+				t.detach();
 				sendOK( true );
 			}
 			else

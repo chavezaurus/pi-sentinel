@@ -227,6 +227,16 @@ class SentinelServer(object):
             if len(lst) >= 2:
                 rmtree(os.path.join(self.archivePath,lst[0]))
 
+    def buildMp4File(self):
+        lst = glob.glob("new/*.tmp")
+        for tempPath in lst:
+            pre, ext = os.path.splitext(tempPath)
+            videoPath = pre + ".h264"
+            mp4Path = pre + ".mp4"
+            os.rename(tempPath, videoPath)
+            cmd =  "MP4Box -add %s -fps 30 -quiet -new %s" % (videoPath,mp4Path)
+            os.system(cmd)
+
     def backgroundProcess(self):
         #Wait for engine to start up
         while cherrypy.engine.state != cherrypy.engine.states.STARTED:
@@ -252,6 +262,8 @@ class SentinelServer(object):
 
                 if self.archivePath != "none":
                     self.pruneArchive()
+
+                self.buildMp4File()
 
             lastTime = tnow
             time.sleep(10)
@@ -585,11 +597,7 @@ class SentinelServer(object):
             moonx = data["Moon"][0]
             moony = data["Moon"][1]
 
-        r = self.funnelCmd("set_moon_x %d" % moonx )
-        if r["response"] != "OK":
-            return r
-
-        r = self.funnelCmd("set_moon_y %d" % moony )
+        r = self.funnelCmd("set_moon %d %d" % (moonx,moony) )
         if r["response"] != "OK":
             return r
 
