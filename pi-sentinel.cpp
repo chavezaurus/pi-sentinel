@@ -163,12 +163,6 @@ SentinelCamera::SentinelCamera()
 		if ( ret < 0 )
             throw std::runtime_error("Can't set buffer for request");
 
-        //
-        // Set frame rate to 30/sec
-        //
-		ControlList &controls = request->controls();
-		int64_t frame_time = 1000000 / 30; // in us
-		controls.set(controls::FrameDurationLimits, { frame_time, frame_time });
 
 		requests.push_back(std::move(request));
 	}
@@ -335,7 +329,14 @@ void SentinelCamera::start()
 	check_thread = thread( &SentinelCamera::checkThread, this );
 	event_thread = thread( &SentinelCamera::eventThread, this );
 
-	camera->start();
+	//
+    // Set frame rate to 30/sec
+    //
+	ControlList controls;
+	int64_t frame_time = 1000000 / 30; // in us
+	controls.set(controls::FrameDurationLimits, { frame_time, frame_time });
+
+	camera->start( &controls );
 	for (std::unique_ptr<Request> &request : requests)
 	{
 		request->reuse(Request::ReuseBuffers);
@@ -674,8 +675,8 @@ void SentinelCamera::runDecoder( string videoFilePath, ProcessType process )
         if (errno != EAGAIN)
 			throw std::runtime_error( "error receiving decoded buffers" );
 
-        // Poll after a 10ms delay -- TODO use poll() instead
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        // Poll after a 3ms delay -- TODO use poll() instead
+        std::this_thread::sleep_for(std::chrono::milliseconds(3));
     }
 }
 
@@ -1201,7 +1202,7 @@ void SentinelCamera::checkThread()
 		// Temporarily de-sensitize
 		memset(referenceFrame, 0xff, CHECK_FRAME_SIZE);
 
-		rateLimitBank = std::min(0,rateLimitBank-FRAMES_PER_HOUR/max_events_per_hour);
+		rateLimitBank = std::max(0,rateLimitBank-FRAMES_PER_HOUR/max_events_per_hour);
 
 		std::cerr << "Terminate trigger at:" << dateTimeString(frameTime) << std::endl;
 	};
@@ -1209,7 +1210,7 @@ void SentinelCamera::checkThread()
 	for (;;)
 	{
 		++frameCount;
-		rateLimitBank = std::max(rateLimitBank+1,FRAMES_PER_HOUR);
+		rateLimitBank = std::min(rateLimitBank+1,FRAMES_PER_HOUR);
 
 		{
 			std::unique_lock<std::mutex> locker(check_mutex);
@@ -1258,7 +1259,8 @@ void SentinelCamera::checkThread()
 			*pRef++ = c;			
 		}
 
-		// std::cerr << (triggered ? 1 : 0) << " " << (untriggered ? 1 : 0) << " " << sumThreshold << " " << sum << std::endl;
+		if ( sum > 0 )
+			std::cerr << sum << std::endl;
 
 		if ( !triggered )
 		{
