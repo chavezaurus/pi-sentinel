@@ -485,6 +485,8 @@ std::vector<std::unique_ptr<MappedBuffer>> SentinelCamera::map_decoder_buffers(v
 
 void SentinelCamera::readMask()
 {
+	std::cerr << "noise_level: " << noise_level << std::endl;
+
 	struct jpeg_decompress_struct info;
 	struct jpeg_error_mgr err;
 
@@ -531,7 +533,7 @@ void SentinelCamera::readMask()
 	jpeg_destroy_decompress(&info);
 	fclose(fHandle);
 
-	if ( imgWidth == 640 && imgWidth == 360 )
+	if ( imgWidth == 640 && imgHeight == 360 )
 	{
 		for ( int i = 0; i < 640*360; ++i )
 		{
@@ -540,7 +542,10 @@ void SentinelCamera::readMask()
 			int b = lpData[3*i+2];
 
         	if (r > 250 && g < 10 && b < 10)
+			{
             	maskFrame[i] = 255;
+				// std::cerr << "i: " << i << " r: " << r << " g: " << g << " b: " << b << std::endl;
+			}
 		}
 	}
 
@@ -1206,6 +1211,8 @@ void SentinelCamera::checkThread()
 
 		std::cerr << "Terminate trigger at:" << dateTimeString(frameTime) << std::endl;
 	};
+
+	readMask();
 
 	for (;;)
 	{
