@@ -5,6 +5,8 @@
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <string.h>
@@ -18,6 +20,8 @@
 #include "pi-sentinel.hpp"
 
 using namespace std::chrono_literals;
+
+#define SOCKET_NAME "/tmp/sentinel.sock"
 
 //
 // Stripped down JSON parser, parses only vanilla dictionary of doubles
@@ -98,12 +102,12 @@ SentinelCamera::SentinelCamera()
 	max_frame_count = 0;
 	checkBufferHead = 0;
 	checkBufferTail = 0;
-	noise_level = 50;
+	noise_level = 30;
 	moonx = 0;
 	moony = 0;
 	force_count = 0;
-	sumThreshold = 175;
-	max_events_per_hour = 10;
+	sumThreshold = 35;
+	max_events_per_hour = 5;
 	force_event = false;
 
     cm = new CameraManager();
@@ -706,6 +710,8 @@ void SentinelCamera::stopDecoder()
     decoded_reqbuf.memory = V4L2_MEMORY_MMAP;
     if (v4l2_ioctl(decoder_fd, VIDIOC_REQBUFS, &decoded_reqbuf)) 
 		throw std::runtime_error("error releasing decoded buffers");
+
+	close( decoder_fd );
 }
 
 void SentinelCamera::encodeJPEG( void* mem, const string& fileName )
@@ -1164,6 +1170,8 @@ void SentinelCamera::checkThread()
 	abortCheckThread = false;
 	int previous = 0;
 
+	double sumAverage = 0.0;
+
 	referenceFrame = new unsigned char[CHECK_FRAME_SIZE];
 	maskFrame      = new unsigned char[CHECK_FRAME_SIZE];
 
@@ -1266,8 +1274,9 @@ void SentinelCamera::checkThread()
 			*pRef++ = c;			
 		}
 
-		if ( sum > 0 )
-			std::cerr << sum << std::endl;
+		sumAverage = 0.99*sumAverage + 0.01*sum;
+		if ( (frameCount & 30) == 0 )
+			std::cerr << sumAverage << std::endl;
 
 		if ( !triggered )
 		{
@@ -1577,9 +1586,11 @@ void SentinelCamera::makeComposite( string filePath )
 	memset(composeBuffer,0,1920*1088);
 	memset(composeBuffer+1920*1088,128,1920*1088/2);
 
+	std::cerr << "Create decoder" << std::endl;
 	createDecoder();
 	runDecoder( filePath, fmax );
 	stopDecoder();
+	std::cerr << "Stop decoder" << std::endl;
 
 	std::filesystem::path p = filePath;
 	p.replace_extension(".jpg");
@@ -1797,6 +1808,147 @@ void sendOK( bool ok )
 		std::cout << "=No" << std::endl;
 }
 
+string executeCommand( SentinelCamera& sentinelCamera, std::istringstream& iss )
+{
+	string cmd;
+	std::ostringstream oss;
+
+	iss >> cmd;
+
+	if ( cmd == "get_running" )
+		oss << (sentinelCamera.running ? "Yes" : "No");
+	else if ( cmd == "get_frame_rate" )
+		oss << "0";
+	else if ( cmd == "get_zenith_amplitude" )
+		oss << "0";
+	else if ( cmd == "get_noise" )
+		oss << sentinelCamera.noise_level;
+	else if ( cmd == "get_sum_threshold" )
+		oss << sentinelCamera.sumThreshold;
+	else if ( cmd == "get_max_events_per_hour" )
+		oss << sentinelCamera.max_events_per_hour;
+	else if ( cmd == "get_archive_path" )
+		oss << (sentinelCamera.archivePath.empty() ? "none" : sentinelCamera.archivePath );
+	else if ( cmd == "start" )
+	{
+		if ( sentinelCamera.running )
+			oss << "No";
+		else
+		{
+			sentinelCamera.start();
+			oss << "OK";
+		}
+	}
+	else if ( cmd == "stop" )
+	{
+		if ( !sentinelCamera.running )
+			oss << "No";
+		else
+		{
+			sentinelCamera.stop();
+			oss << "OK";
+		}
+	}
+	else if ( cmd == "force_trigger" )
+	{
+		if ( sentinelCamera.running )
+		{
+			sentinelCamera.forceEvent();
+			oss << "OK";
+		}
+		else
+			oss << "No";
+	}
+	else if ( cmd == "compose" )
+	{
+		std::cout << (sentinelCamera.running ? "=No" : "=OK") << std::endl;
+		string path;
+		if ( iss >> path )
+		{
+			std::thread t( &SentinelCamera::makeComposite, &sentinelCamera, path );
+			t.detach();
+			oss << "OK";
+		}
+		else
+			oss << "No";
+	}
+	else if ( cmd == "analyze" )
+	{
+		std::cout << (sentinelCamera.running ? "=No" : "=OK") << std::endl;
+		string path;
+		if ( iss >> path )
+		{
+			std::thread t( &SentinelCamera::makeAnalysis, &sentinelCamera, path );
+			t.detach();
+			oss << "OK";
+		}
+		else
+			oss << "No";
+	}
+	else if ( cmd == "set_moon" )
+	{
+		int mx, my;
+		if ( iss >> mx >> my )
+		{
+			sentinelCamera.moonx = mx;
+			sentinelCamera.moony = my;
+			oss << "OK";
+		}
+		else
+			oss << "No";
+	}
+	else if ( cmd == "set_noise" )
+	{
+		int noise;
+		if ( iss >> noise )
+		{				
+			sentinelCamera.noise_level = noise;
+			oss << "OK";
+		}
+		else
+			oss << "No";
+	}
+	else if ( cmd == "set_sum_threshold" )
+	{
+		int threshold;
+		if ( iss >> threshold )
+		{
+			sentinelCamera.sumThreshold = threshold;
+			oss << "OK";
+		}
+		else
+			oss << "No";
+	}
+	else if ( cmd == "set_archive_path" )
+	{
+		string path;
+		if ( (iss >> path) )
+		{
+			if ( path == "none" )
+				sentinelCamera.archivePath = "";
+			else
+				sentinelCamera.archivePath = path;
+			oss << "OK";
+		}
+		else
+			oss << "No";
+	}
+	else if ( cmd == "set_max_events_per_hour" )
+	{
+		int max_events;
+		if ( iss >> max_events )
+		{
+			sentinelCamera.max_events_per_hour = max_events;
+			oss << "OK";
+		}
+		else
+			oss << "No";
+	}
+
+	oss << std::endl;
+	return oss.str();
+}
+
 void runInteractive( bool mum )
 {
     SentinelCamera sentinelCamera;
@@ -1813,7 +1965,7 @@ void runInteractive( bool mum )
 		string line;
 		std::getline( std::cin, line );
 
-		std::cerr << line << std::endl;
+		std::cerr << line << std::endl << std::flush;
 
 		std::istringstream iss(line);
 		std::string cmd;
@@ -1959,6 +2111,108 @@ void runInteractive( bool mum )
 	}
 }
 
+void runSocket()
+{
+	const int BUF_SIZE = 256;
+	struct sockaddr_un addr;
+
+	char buf[BUF_SIZE];
+	size_t buf_used = 0;
+
+    SentinelCamera sentinelCamera;
+
+	// Create a new server socket with domain: AF_UNIX, type: SOCK_STREAM, protocol: 0
+	int sfd = socket(AF_UNIX, SOCK_STREAM, 0);
+
+	// Make sure the address we're planning to use isn't too long.
+	if (strlen(SOCKET_NAME) > sizeof(addr.sun_path) - 1)
+		throw std::runtime_error("Socket address too long");
+
+	// Delete any file that already exists at the address. Make sure the deletion
+	// succeeds. If the error is just that the file/directory doesn't exist, it's fine.
+	if (remove(SOCKET_NAME) == -1 && errno != ENOENT)
+		throw std::runtime_error("Could not remove old socket address");
+
+	// Zero out the address, and set family and path.
+	memset(&addr, 0, sizeof(struct sockaddr_un));
+	addr.sun_family = AF_UNIX;
+	strncpy(addr.sun_path, SOCKET_NAME, sizeof(addr.sun_path) - 1);
+
+	// Bind the socket to the address. Note that we're binding the server socket
+	// to a well-known address so that clients know where to connect.
+	if (bind(sfd, (struct sockaddr *) &addr, sizeof(struct sockaddr_un)) == -1)
+		throw std::runtime_error("Could not bind socket");
+
+	// The listen call marks the socket as *passive*. The socket will subsequently
+	// be used to accept connections from *active* sockets.
+	// listen cannot be called on a connected socket (a socket on which a connect()
+	// has been succesfully performed or a socket returned by a call to accept()).
+	if (listen(sfd, 1) == -1)
+		throw std::runtime_error("Listen call failed");
+
+	for (;;) 
+	{          /* Handle client connections iteratively */
+
+		// Accept a connection. The connection is returned on a NEW
+		// socket, 'cfd'; the listening socket ('sfd') remains open
+		// and can be used to accept further connections. */
+		printf("Waiting to accept a connection...\n");
+		// NOTE: blocks until a connection request arrives.
+		int cfd = accept(sfd, NULL, NULL);
+		printf("Accepted socket fd = %d\n", cfd);
+
+		//
+		// Transfer data from connected socket to stdout until EOF */
+		//
+
+		for (;;)
+		{
+			size_t buf_remain = sizeof(buf) - buf_used;
+			if ( buf_remain == 0 )
+				throw std::runtime_error("Line exceeded buffer length.");
+
+			int rv = read( cfd, (void *)&buf[buf_used], buf_remain );
+			if ( rv < 0 )
+				throw std::runtime_error("Error reading from socket");
+
+			if ( rv == 0 )
+			{
+				if ( close(cfd) == -1 )
+					throw std::runtime_error("Error closing socket");
+
+				break;
+			}
+
+			buf_used += rv;
+			char *line_end;
+			
+			while ( (line_end = (char*)memchr( (void*)buf, '\n', buf_used ) ) )
+			{
+				*line_end = 0;
+
+				string cmd = string(buf);
+				std::cout << cmd << std::endl;
+
+				if ( cmd == "quit" )
+				{
+					sentinelCamera.stop();
+					return;
+				}
+
+				std::istringstream iss(cmd);
+
+				string result = executeCommand( sentinelCamera, iss );
+				write( cfd, (void*)result.c_str(), result.length() );
+				std::cout << result << std::endl;
+
+				char* line_start = line_end + 1;
+				buf_used -= (line_start - buf);
+				memmove(buf, line_start, buf_used);
+			}
+		}
+    }
+}
+
 void runSingle( int frame_count, int force_count, int noise_level )
 {
 	SentinelCamera sentinelCamera;
@@ -1986,6 +2240,7 @@ int main( int argc, char **argv )
 	bool interactive = false;
 	bool decoder_test = false;
 	bool analysis_test = false;
+	bool socket_interface = false;
 	int frame_count = 300;
 	int force_count = 200;
 	int noise_level = 50;
@@ -1993,13 +2248,14 @@ int main( int argc, char **argv )
 
 	int opt;
 
-	while ((opt = getopt(argc, argv, "a:isd:c:f:n:")) != -1)
+	while ((opt = getopt(argc, argv, "a:istd:c:f:n:")) != -1)
 	{
 		switch ( opt )
 		{
 			case 'a': analysis_test = true; path = optarg; break;
 			case 'i': interactive = true; break;
 			case 's': interactive = true; mum = true; break;
+			case 't': socket_interface = true; break;
 			case 'd': decoder_test = true; path = optarg; break;
 			case 'c': frame_count = std::stoi( optarg ); break;
 			case 'f': force_count = std::stoi( optarg ); break;
@@ -2013,6 +2269,8 @@ int main( int argc, char **argv )
 		runAnalysisTest( path );
 	else if ( interactive )
 		runInteractive( mum );
+	else if ( socket_interface )
+		runSocket();
 	else
 		runSingle( frame_count, force_count, noise_level );
 

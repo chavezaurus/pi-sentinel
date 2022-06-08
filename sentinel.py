@@ -4,7 +4,7 @@ import cherrypy
 import os, os.path
 import time
 import glob
-import subprocess
+import socket
 import select
 import datetime
 import json
@@ -135,7 +135,7 @@ def TotalCalibrationError(calVector, skyList ):
 class SentinelServer(object):
 
     def __init__(self):
-        self.sentinelProcess = None
+        self.sentinelSocket = None
         self.cmdQueue = Queue()
         self.startTime = "21:30"
         self.stopTime  = "05:00"
@@ -186,36 +186,27 @@ class SentinelServer(object):
         queue = obj['queue']
 
         #Send command to Sentinel Process
-        self.sentinelProcess.stdin.write(cmd)
-        self.sentinelProcess.stdin.flush()
+        self.sentinelSocket.send(cmd.encode())
 
         #Wait for response from Sentinel Process
-        while True:
-            fdlst = self.y.poll(1000)
-            for fd,flags in fdlst:
-                if flags & (select.POLLERR|select.POLLHUP|select.POLLNVAL):
-                    print("Sentinel communications error")
-                    queue.put({'response': 'Sentinel comm error'})
-                    return
-
-            if not fdlst:
-                print("handleSentinelCommand: timeout")
+        response = ""
+        self.sentinelSocket.settimeout(3.0)
+        while not response or response[-1] != '\n':
+            try:
+                data = self.sentinelSocket.recv(80)
+                print(data)
+                response += data.decode()
+            except socket.timeout as e:
+                print(e)
                 queue.put({'response': 'Sentinel comm timeout'})
                 return
 
-            line = self.sentinelProcess.stdout.readline()
-            if not line:
-                print("handleSentinelCommand: readline failed")
-                queue.put({'response': 'Sentinel comm read failure'})
+            if not response:
+                print("Sentinel communications error")
+                queue.put({'response': 'Sentinel comm error'})
                 return
 
-            #True responses start with a '='
-            n = line.find('=')
-            if n >= 0:
-                queue.put({'response': line[n+1:-1]})
-                break
-            else:
-                print(line,end='')
+        queue.put({'response': response[:-1]})
 
     def pruneArchive(self):
         stat = os.statvfs(self.archivePath)
@@ -274,16 +265,6 @@ class SentinelServer(object):
             time.sleep(1)
 
         while cherrypy.engine.state == cherrypy.engine.states.STARTED:
-            #Dispose of miscellaneous output from Sentinel Process
-            fdlist = self.y.poll(1)
-            for fd, flags in fdlist:
-                if flags & (select.POLLERR|select.POLLHUP):
-                    print("Sentinel communications error")
-                    return
-
-                if flags & select.POLLIN:
-                    print(self.sentinelProcess.stdout.readline(),end='')
-
             #Check for commands from web
             try:
                 obj = self.cmdQueue.get(timeout=10)
@@ -319,9 +300,8 @@ class SentinelServer(object):
         return response
         
     def connectToSentinel(self):
-        self.sentinelProcess = Popen(['./builddir/sentinel', '-s'], stdin=PIPE, stdout=PIPE, shell=False, universal_newlines=True)
-        self.y = select.poll()
-        self.y.register(self.sentinelProcess.stdout, select.POLLIN|select.POLLERR|select.POLLHUP|select.POLLNVAL)
+        self.sentinelSocket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sentinelSocket.connect("/tmp/sentinel.sock")
         background = Thread(target = self.backgroundProcess)
         background.daemon = True
         background.start()
