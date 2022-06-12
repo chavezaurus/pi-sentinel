@@ -194,7 +194,6 @@ class SentinelServer(object):
         while not response or response[-1] != '\n':
             try:
                 data = self.sentinelSocket.recv(80)
-                print(data)
                 response += data.decode()
             except socket.timeout as e:
                 print(e)
@@ -225,8 +224,9 @@ class SentinelServer(object):
             videoPath = pre + ".h264"
             mp4Path = pre + ".mp4"
             os.rename(tempPath, videoPath)
-            cmd =  "MP4Box -add %s -fps 30 -quiet -new %s" % (videoPath,mp4Path)
-            os.system(cmd)
+            # cmd =  "MP4Box -add %s -fps 30 -quiet -new %s" % (videoPath,mp4Path)
+            pid = Popen(["MP4Box", "-add", videoPath, "-fps", "30", "-quiet", "-new", mp4Path]).pid
+            print(mp4Path)
 
     def backgroundProcess(self):
         #Wait for engine to start up
@@ -254,7 +254,7 @@ class SentinelServer(object):
                 if self.archivePath != "none":
                     self.pruneArchive()
 
-                self.buildMp4File()
+            self.buildMp4File()
 
             lastTime = tnow
             time.sleep(10)
@@ -300,6 +300,8 @@ class SentinelServer(object):
         return response
         
     def connectToSentinel(self):
+        pid = Popen(["builddir/sentinel", "-s"]).pid
+        time.sleep(2.0)
         self.sentinelSocket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.sentinelSocket.connect("/tmp/sentinel.sock")
         background = Thread(target = self.backgroundProcess)
@@ -861,3 +863,5 @@ if __name__ == '__main__':
     server.connectToSentinel()
     cherrypy.config.update({'server.socket_host': '0.0.0.0', 'server.socket_port': 9090})
     cherrypy.quickstart(server, '/', conf)
+    # server.sentinelSocket.send("quit\n".encode())
+    print("pi-sentinel end")

@@ -110,92 +110,12 @@ SentinelCamera::SentinelCamera()
 	max_events_per_hour = 5;
 	force_event = false;
 
-    cm = new CameraManager();
-    cm->start();
-
-    if ( cm->cameras().empty() )
-    {
-        cm->stop();
-        throw std::runtime_error("No cameras were identified on the system");
-    }
-
-	std::string cameraId = cm->cameras()[0]->id();
-	camera = cm->get(cameraId);
-	camera->acquire();
-
-    // Setup the VideoRecording stream to produce the encoded archive files
-    // and the ViewFinder stream to produce the frames used for event triggering
-    config = camera->generateConfiguration( { StreamRole::VideoRecording, StreamRole::Viewfinder } );
-
-	StreamConfiguration &streamConfig1 = config->at(0);
-	StreamConfiguration &streamConfig2 = config->at(1);
-
-	streamConfig2.size.width = 640;
-	streamConfig2.size.height = 360;
-	streamConfig2.pixelFormat = libcamera::formats::YUV420;
-
-	camera->configure(config.get());
-
-	allocator = new FrameBufferAllocator(camera);
-
-	for (StreamConfiguration &cfg : *config) 
-    {
-		int ret = allocator->allocate(cfg.stream());
-		if ( ret < 0 ) 
-            throw std::runtime_error("Can't allocate buffers");
-	}
-
-	Stream *stream1 = streamConfig1.stream();
-	Stream *stream2 = streamConfig2.stream();
-
-	const std::vector<std::unique_ptr<FrameBuffer>> &buffers1 = allocator->buffers(stream1);
-	const std::vector<std::unique_ptr<FrameBuffer>> &buffers2 = allocator->buffers(stream2);
-
-	for (unsigned int i = 0; i < buffers1.size(); ++i) 
-    {
-		std::unique_ptr<Request> request = camera->createRequest( id );
-		if ( !request )
-            throw std::runtime_error("Can't create request");
-
-		const std::unique_ptr<FrameBuffer> &buffer1 = buffers1[i];
-		int ret = request->addBuffer(stream1, buffer1.get());
-		if ( ret < 0 )
-            throw std::runtime_error("Can't set buffer for request");
-
-		const std::unique_ptr<FrameBuffer> &buffer2 = buffers2[i];
-		ret = request->addBuffer(stream2, buffer2.get());
-		if ( ret < 0 )
-            throw std::runtime_error("Can't set buffer for request");
-
-
-		requests.push_back(std::move(request));
-	}
-
-    camera->requestCompleted.connect(requestComplete);
 	syncTime();
 
-	for ( int i = 0; i < NUM_CHECK_BUFFERS; ++i )
-	{
-		checkBuffers[i].mem = new unsigned char[CHECK_FRAME_SIZE];
-		checkBuffers[i].timestamp_us = 0;
-	}
 }
 
 SentinelCamera::~SentinelCamera()
 {
-	camera->stop();
-    for ( StreamConfiguration &cfg : *config ) 
-    {
-        allocator->free(cfg.stream());
-    }
-
-	delete allocator;
-	camera->release();
-	camera.reset();
-	cm->stop();
-
-	for ( int i = 0; i < NUM_CHECK_BUFFERS; ++i )
-		delete[] checkBuffers[i].mem;
 }
 
 void SentinelCamera::requestComplete(Request* request)
@@ -291,6 +211,9 @@ void SentinelCamera::requestThread()
 				fillCheckBuffer( fd, timestamp_us );
 	    }
 
+		ControlList &controls = request->controls();
+		controls.set(controls::AnalogueGain, 16.0);
+
 	    // Re-queue the Request to the camera.
 	    request->reuse(Request::ReuseBuffers);
 	    camera->queueRequest(request);
@@ -321,8 +244,79 @@ void SentinelCamera::start()
 	if ( running )
 		return;
 
+    cm = new CameraManager();
+    cm->start();
+
+    if ( cm->cameras().empty() )
+    {
+        cm->stop();
+        throw std::runtime_error("No cameras were identified on the system");
+    }
+
+	std::string cameraId = cm->cameras()[0]->id();
+	camera = cm->get(cameraId);
+	camera->acquire();
+
+    // Setup the VideoRecording stream to produce the encoded archive files
+    // and the ViewFinder stream to produce the frames used for event triggering
+    config = camera->generateConfiguration( { StreamRole::VideoRecording, StreamRole::Viewfinder } );
+
+	StreamConfiguration &streamConfig1 = config->at(0);
+	StreamConfiguration &streamConfig2 = config->at(1);
+
+	streamConfig2.size.width = 640;
+	streamConfig2.size.height = 360;
+	streamConfig2.pixelFormat = libcamera::formats::YUV420;
+
+	camera->configure(config.get());
+
+	allocator = new FrameBufferAllocator(camera);
+
+	for (StreamConfiguration &cfg : *config) 
+    {
+		int ret = allocator->allocate(cfg.stream());
+		if ( ret < 0 ) 
+            throw std::runtime_error("Can't allocate buffers");
+	}
+
+	Stream *stream1 = streamConfig1.stream();
+	Stream *stream2 = streamConfig2.stream();
+
+	const std::vector<std::unique_ptr<FrameBuffer>> &buffers1 = allocator->buffers(stream1);
+	const std::vector<std::unique_ptr<FrameBuffer>> &buffers2 = allocator->buffers(stream2);
+
+	requests.clear();
+
+	for (unsigned int i = 0; i < buffers1.size(); ++i) 
+    {
+		std::unique_ptr<Request> request = camera->createRequest( id );
+		if ( !request )
+            throw std::runtime_error("Can't create request");
+
+		const std::unique_ptr<FrameBuffer> &buffer1 = buffers1[i];
+		int ret = request->addBuffer(stream1, buffer1.get());
+		if ( ret < 0 )
+            throw std::runtime_error("Can't set buffer for request");
+
+		const std::unique_ptr<FrameBuffer> &buffer2 = buffers2[i];
+		ret = request->addBuffer(stream2, buffer2.get());
+		if ( ret < 0 )
+            throw std::runtime_error("Can't set buffer for request");
+
+
+		requests.push_back(std::move(request));
+	}
+
+    camera->requestCompleted.connect(requestComplete);
 	while ( !input_buffers_available.empty() )
 		input_buffers_available.pop();
+
+	for ( int i = 0; i < NUM_CHECK_BUFFERS; ++i )
+	{
+		checkBuffers[i].mem = new unsigned char[CHECK_FRAME_SIZE];
+		checkBuffers[i].timestamp_us = 0;
+	}
+
 	createEncoder();
 
 	completedRequests.clear();
@@ -339,10 +333,14 @@ void SentinelCamera::start()
 	ControlList controls;
 	int64_t frame_time = 1000000 / 30; // in us
 	controls.set(controls::FrameDurationLimits, { frame_time, frame_time });
+	controls.set(controls::AnalogueGain, 0.0);
 
 	camera->start( &controls );
 	for (std::unique_ptr<Request> &request : requests)
 	{
+		ControlList &controls = request->controls();
+		controls.set(controls::AnalogueGain, 16.0);
+		
 		request->reuse(Request::ReuseBuffers);
 		camera->queueRequest(request.get());
 	}
@@ -385,6 +383,21 @@ void SentinelCamera::completeShutdown()
     camera->stop();
 
 	close(encoder_fd);
+
+    for ( StreamConfiguration &cfg : *config ) 
+    {
+        allocator->free(cfg.stream());
+    }
+
+	delete allocator;
+	camera->release();
+	camera.reset();
+	cm->stop();
+
+	for ( int i = 0; i < NUM_CHECK_BUFFERS; ++i )
+		delete[] checkBuffers[i].mem;
+
+	delete cm;
 }
 
 void SentinelCamera::stop()
@@ -1275,8 +1288,8 @@ void SentinelCamera::checkThread()
 		}
 
 		sumAverage = 0.99*sumAverage + 0.01*sum;
-		if ( (frameCount & 30) == 0 )
-			std::cerr << sumAverage << std::endl;
+		if ( (frameCount % 60) == 0 )
+			std::cerr << sumAverage << std::endl << std::flush;
 
 		if ( !triggered )
 		{
@@ -1949,168 +1962,6 @@ string executeCommand( SentinelCamera& sentinelCamera, std::istringstream& iss )
 	return oss.str();
 }
 
-void runInteractive( bool mum )
-{
-    SentinelCamera sentinelCamera;
-
-	std::string cmd;
-
-	for (;;)
-	{
-		if ( ! mum )
-			std::cout << "cmd: ";
-
-		std::cout << std::flush;
-
-		string line;
-		std::getline( std::cin, line );
-
-		std::cerr << line << std::endl << std::flush;
-
-		std::istringstream iss(line);
-		std::string cmd;
-
-		iss >> cmd;
-
-		if ( cmd == "quit" )
-		{
-			sentinelCamera.stop();
-			std::cout << "Quit" << std::endl;
-			return;
-		}
-
-		if ( cmd == "get_running" )
-			std::cout << (sentinelCamera.running ? "=Yes" : "=No") << std::endl;
-		else if ( cmd == "get_frame_rate" )
-			std::cout << "=0" << std::endl;
-		else if ( cmd == "get_zenith_amplitude" )
-			std::cout << "=0" << std::endl;
-		else if ( cmd == "get_noise" )
-			std::cout << "=" << sentinelCamera.noise_level << std::endl;
-		else if ( cmd == "get_sum_threshold" )
-			std::cout << "=" << sentinelCamera.sumThreshold << std::endl;
-		else if ( cmd == "get_max_events_per_hour" )
-			std::cout << "=" << sentinelCamera.max_events_per_hour << std::endl;
-		else if ( cmd == "get_archive_path" )
-			std::cout << "=" << (sentinelCamera.archivePath.empty() ? "none" : sentinelCamera.archivePath ) << std::endl;
-		else if ( cmd == "start" )
-		{
-			if ( sentinelCamera.running )
-				sendOK( false );
-			else
-			{
-				sentinelCamera.start();
-				sendOK( true );
-			}
-		}
-		else if ( cmd == "stop" )
-		{
-			if ( !sentinelCamera.running )
-				sendOK( false );
-			else
-			{
-				sentinelCamera.stop();
-				sendOK( true );
-			}
-		}
-		else if ( cmd == "force_trigger" )
-		{
-			if ( sentinelCamera.running )
-			{
-				sentinelCamera.forceEvent();
-				sendOK( true );
-			}
-			else
-				sendOK( false );
-		}
-		else if ( cmd == "compose" )
-		{
-			std::cout << (sentinelCamera.running ? "=No" : "=OK") << std::endl;
-			string path;
-			if ( iss >> path )
-			{
-				std::thread t( &SentinelCamera::makeComposite, &sentinelCamera, path );
-    			t.detach();
-				sendOK( true );
-			}
-			else
-				sendOK( false );
-		}
-		else if ( cmd == "analyze" )
-		{
-			std::cout << (sentinelCamera.running ? "=No" : "=OK") << std::endl;
-			string path;
-			if ( iss >> path )
-			{
-				std::thread t( &SentinelCamera::makeAnalysis, &sentinelCamera, path );
-				t.detach();
-				sendOK( true );
-			}
-			else
-				sendOK( false );
-		}
-		else if ( cmd == "set_moon" )
-		{
-			int mx, my;
-			if ( iss >> mx >> my )
-			{
-				sentinelCamera.moonx = mx;
-				sentinelCamera.moony = my;
-				sendOK( true );
-			}
-			else
-				sendOK( false );
-		}
-		else if ( cmd == "set_noise" )
-		{
-			int noise;
-			if ( iss >> noise )
-			{				
-				sentinelCamera.noise_level = noise;
-				sendOK( true );
-			}
-			else
-				sendOK( false );
-		}
-		else if ( cmd == "set_sum_threshold" )
-		{
-			int threshold;
-			if ( iss >> threshold )
-			{
-				sentinelCamera.sumThreshold = threshold;
-				sendOK( true );
-			}
-			else
-				sendOK( false );
-		}
-		else if ( cmd == "set_archive_path" )
-		{
-			string path;
-			if ( (iss >> path) )
-			{
-				if ( path == "none" )
-					sentinelCamera.archivePath = "";
-				else
-					sentinelCamera.archivePath = path;
-				sendOK( true );
-			}
-			else
-				sendOK( false );
-		}
-		else if ( cmd == "set_max_events_per_hour" )
-		{
-			int max_events;
-			if ( iss >> max_events )
-			{
-				sentinelCamera.max_events_per_hour = max_events;
-				sendOK( true );
-			}
-			else
-				sendOK( false );
-		}
-	}
-}
-
 void runSocket()
 {
 	const int BUF_SIZE = 256;
@@ -2191,7 +2042,7 @@ void runSocket()
 				*line_end = 0;
 
 				string cmd = string(buf);
-				std::cout << cmd << std::endl;
+				// std::cout << cmd << std::endl;
 
 				if ( cmd == "quit" )
 				{
@@ -2203,7 +2054,7 @@ void runSocket()
 
 				string result = executeCommand( sentinelCamera, iss );
 				write( cfd, (void*)result.c_str(), result.length() );
-				std::cout << result << std::endl;
+				// std::cout << result << std::endl;
 
 				char* line_start = line_end + 1;
 				buf_used -= (line_start - buf);
@@ -2236,8 +2087,6 @@ void runAnalysisTest( string path )
 
 int main( int argc, char **argv )
 {
-	bool mum = false;
-	bool interactive = false;
 	bool decoder_test = false;
 	bool analysis_test = false;
 	bool socket_interface = false;
@@ -2248,14 +2097,12 @@ int main( int argc, char **argv )
 
 	int opt;
 
-	while ((opt = getopt(argc, argv, "a:istd:c:f:n:")) != -1)
+	while ((opt = getopt(argc, argv, "a:sd:c:f:n:")) != -1)
 	{
 		switch ( opt )
 		{
 			case 'a': analysis_test = true; path = optarg; break;
-			case 'i': interactive = true; break;
-			case 's': interactive = true; mum = true; break;
-			case 't': socket_interface = true; break;
+			case 's': socket_interface = true; break;
 			case 'd': decoder_test = true; path = optarg; break;
 			case 'c': frame_count = std::stoi( optarg ); break;
 			case 'f': force_count = std::stoi( optarg ); break;
@@ -2267,8 +2114,6 @@ int main( int argc, char **argv )
 		runDecoderTest( path );
 	else if ( analysis_test )
 		runAnalysisTest( path );
-	else if ( interactive )
-		runInteractive( mum );
 	else if ( socket_interface )
 		runSocket();
 	else

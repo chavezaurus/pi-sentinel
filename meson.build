@@ -3,7 +3,7 @@ project('sentinel', 'c', 'cpp',
 		'werror=true',
 		'warning_level=2',
 		'cpp_std=c++17',
-		'optimization=0',
+		'optimization=2',
 	])
 
 # pi-sentinel.cpp is the fully commented application
