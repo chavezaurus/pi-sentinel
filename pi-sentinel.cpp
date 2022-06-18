@@ -108,6 +108,7 @@ SentinelCamera::SentinelCamera()
 	force_count = 0;
 	sumThreshold = 35;
 	max_events_per_hour = 5;
+	zenithAmplitude = 0.0;
 	force_event = false;
 
 	syncTime();
@@ -211,12 +212,11 @@ void SentinelCamera::requestThread()
 				fillCheckBuffer( fd, timestamp_us );
 	    }
 
-		ControlList &controls = request->controls();
-		controls.set(controls::AnalogueGain, 16.0);
-
 	    // Re-queue the Request to the camera.
 	    request->reuse(Request::ReuseBuffers);
-	    camera->queueRequest(request);
+	    int check = camera->queueRequest(request);
+		if ( check != 0 )
+			std::cerr << "Queue request failed" << std::endl;
 
 		// std::cerr << "requestThread" << std::endl;
     }
@@ -287,6 +287,8 @@ void SentinelCamera::start()
 
 	requests.clear();
 
+	std::cerr << "Camera buffers: " << buffers1.size() << std::endl;
+
 	for (unsigned int i = 0; i < buffers1.size(); ++i) 
     {
 		std::unique_ptr<Request> request = camera->createRequest( id );
@@ -333,14 +335,11 @@ void SentinelCamera::start()
 	ControlList controls;
 	int64_t frame_time = 1000000 / 30; // in us
 	controls.set(controls::FrameDurationLimits, { frame_time, frame_time });
-	controls.set(controls::AnalogueGain, 0.0);
+	controls.set(controls::AnalogueGain, 30.0);
 
 	camera->start( &controls );
 	for (std::unique_ptr<Request> &request : requests)
 	{
-		ControlList &controls = request->controls();
-		controls.set(controls::AnalogueGain, 16.0);
-		
 		request->reuse(Request::ReuseBuffers);
 		camera->queueRequest(request.get());
 	}
@@ -1287,9 +1286,28 @@ void SentinelCamera::checkThread()
 			*pRef++ = c;			
 		}
 
+		//
+		// Measure the filtered average amplitude of an arbitrary collection of pixels near the zenith.
+		// This is used to determine if we are looking at a daylight sky where auto-exposure may be the preferred mode.
+		//
+	    int zsum = 0;
+		p = desc.mem;
+
+    	for ( int row = 170; row <= 190; row += 10)
+    	{
+        	for ( int col = 310; col <= 330; col += 10 )
+            	zsum += p[640*row + col];
+    	}
+
+    	double average = zsum / 9.0;
+
+		zenith_mutex.lock();
+    	zenithAmplitude = 0.99 * zenithAmplitude + 0.01 * average;
+		zenith_mutex.unlock();
+
 		sumAverage = 0.99*sumAverage + 0.01*sum;
-		if ( (frameCount % 60) == 0 )
-			std::cerr << sumAverage << std::endl << std::flush;
+		if ( (frameCount % 150) == 0 )
+			std::cerr << sumAverage << " " << zenithAmplitude << std::endl << std::flush;
 
 		if ( !triggered )
 		{
@@ -1833,7 +1851,11 @@ string executeCommand( SentinelCamera& sentinelCamera, std::istringstream& iss )
 	else if ( cmd == "get_frame_rate" )
 		oss << "0";
 	else if ( cmd == "get_zenith_amplitude" )
-		oss << "0";
+	{
+		sentinelCamera.zenith_mutex.lock();
+		oss << sentinelCamera.zenithAmplitude;
+		sentinelCamera.zenith_mutex.unlock();
+	}
 	else if ( cmd == "get_noise" )
 		oss << sentinelCamera.noise_level;
 	else if ( cmd == "get_sum_threshold" )

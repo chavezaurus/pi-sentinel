@@ -104,7 +104,7 @@ private:
 
     queue<OutputItem> output_queue;
     mutex output_mutex;
-	
+
     condition_variable output_cond_var;
 
     static constexpr int NUM_OUTPUT_BUFFERS = 6;
@@ -189,6 +189,9 @@ public:
     int force_count;
     string archivePath;
 
+    mutex zenith_mutex;
+    double zenithAmplitude;
+	
     int sumThreshold;
 };
 
