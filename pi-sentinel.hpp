@@ -43,6 +43,14 @@ struct StorageDescription
     bool key_frame;
 };
 
+struct StorageMeta
+{
+    unsigned int offset;
+    unsigned int size;
+    int64_t timestamp_us;
+    bool key_frame;
+};
+
 struct CheckBufferDescription
 {
     unsigned char* mem;
@@ -82,6 +90,8 @@ private:
     int id;
     int encoder_fd;
     int decoder_fd;
+    int device_fd;
+    unsigned int n_buffers;
 
     deque<Request*> completedRequests;
     mutex requestMutex;
@@ -98,6 +108,7 @@ private:
     thread output_thread;
     thread check_thread;
     thread event_thread;
+    thread device_thread;
 
     mutex input_buffers_available_mutex;
     queue<int> input_buffers_available;
@@ -107,15 +118,25 @@ private:
 
     condition_variable output_cond_var;
 
+    static constexpr int NUM_DEVICE_BUFFERS = 4;
     static constexpr int NUM_OUTPUT_BUFFERS = 6;
     static constexpr int NUM_CAPTURE_BUFFERS = 12;
     static constexpr int NUM_CHECK_BUFFERS = 6;
     static constexpr int CHECK_FRAME_SIZE = 640 * 360;
     static constexpr int STORAGE_SIZE = 1024 << 13;
+    static constexpr int NUM_STORAGE_META = 150;
 
     static vector<SentinelCamera*> cameraVector;
 
     BufferDescription buffers[NUM_CAPTURE_BUFFERS];
+    BufferDescription deviceBuffers[NUM_DEVICE_BUFFERS];
+
+    StorageMeta storageMetas[NUM_STORAGE_META];
+    int metaWriteIndex;
+    int metaSaveIndex;
+    int metaDecodeIndex;
+
+    mutex meta_write_mutex;
 
     map<int,void*> mappedBuffers;
 
@@ -152,8 +173,12 @@ public:
     void outputThread();
     void checkThread();
     void eventThread();
+    void startDeviceCapture();
+    void stopDeviceCapture();
+    void deviceCaptureThread();
 
     void start();
+    void start2();
     void initiateShutdown();
     void completeShutdown();
     void stop();
@@ -173,6 +198,15 @@ public:
     void makeAnalysis( string filePath );
     void makeStarChart( string filePath );
     void forceEvent();
+
+    void openDevice( string devicePath );
+    void closeDevice();
+
+    void initDevice();
+    void uninitDevice();
+
+    bool isIDR(const unsigned char *p, int size);
+
 
     std::vector<std::unique_ptr<MappedBuffer>> map_decoder_buffers(v4l2_buf_type const type);
     string secondsString( int64_t timestamp_us );

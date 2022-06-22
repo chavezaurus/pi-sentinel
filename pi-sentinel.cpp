@@ -22,6 +22,7 @@
 using namespace std::chrono_literals;
 
 #define SOCKET_NAME "/tmp/sentinel.sock"
+#define CLEAR(x) memset(&(x), 0, sizeof(x))
 
 //
 // Stripped down JSON parser, parses only vanilla dictionary of doubles
@@ -119,6 +120,288 @@ SentinelCamera::~SentinelCamera()
 {
 }
 
+void SentinelCamera::openDevice( string devicePath )
+{
+    struct stat st;
+
+    if (-1 == stat(devicePath.c_str(), &st))
+    {
+		std::cerr << "Cannot identify " << devicePath << ": " << errno << ", " << strerror(errno) << std::endl;
+		throw std::runtime_error("Open device failed");
+    }
+
+    if (!S_ISCHR(st.st_mode))
+    {
+		std::cerr << devicePath << " is no device" << std::endl;
+		throw std::runtime_error("Open device failed");
+    }
+
+    device_fd = open( devicePath.c_str(), O_RDWR /* required */ | O_NONBLOCK, 0);
+
+    if (-1 == device_fd)
+    {
+		std::cerr << "Cannot open " << devicePath << ": " << errno << ", " << strerror(errno) << std::endl;
+		throw std::runtime_error("Open device failed");
+    }
+}
+
+void SentinelCamera::closeDevice()
+{
+    if (-1 == close(device_fd))
+		throw std::runtime_error("Error closing device");
+
+    device_fd = -1;
+	std::cerr << "Close device" << std::endl;
+}
+
+
+
+void SentinelCamera::initDevice()
+{
+    v4l2_capability cap;
+    v4l2_cropcap cropcap;
+    v4l2_crop crop;
+    v4l2_format fmt;
+    v4l2_requestbuffers req;
+
+    if (-1 == xioctl(device_fd, VIDIOC_QUERYCAP, &cap))
+		throw std::runtime_error("Failed VIDIOC_QUERYCAP");
+
+    if (!(cap.capabilities & V4L2_CAP_VIDEO_CAPTURE))
+		throw std::runtime_error("Not a video capture device");
+
+    if (!(cap.capabilities & V4L2_CAP_STREAMING))
+		throw std::runtime_error("Device does not support streaming");
+
+    /* Select video input, video standard and tune here. */
+
+    CLEAR(cropcap);
+
+    cropcap.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+
+    if (0 == xioctl( device_fd, VIDIOC_CROPCAP, &cropcap))
+    {
+        crop.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        crop.c = cropcap.defrect; /* reset to default */
+
+        if (-1 == xioctl( device_fd, VIDIOC_S_CROP, &crop))
+        {
+            switch (errno)
+            {
+            case EINVAL:
+                /* Cropping not supported. */
+                break;
+            default:
+                /* Errors ignored. */
+                break;
+            }
+        }
+    }
+    else
+    {
+        /* Errors ignored. */
+    }
+
+    CLEAR(fmt);
+
+    fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+
+    if (-1 == xioctl(device_fd, VIDIOC_G_FMT, &fmt))
+		throw std::runtime_error("Error with VIDIOC_G_FMT");
+
+    if ( fmt.fmt.pix.width != 1920 ||
+         fmt.fmt.pix.height != 1080 ||
+         fmt.fmt.pix.pixelformat != V4L2_PIX_FMT_H264 )
+    {
+        fmt.fmt.pix.width = 1920;
+        fmt.fmt.pix.height = 1080;
+        fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_H264;
+        fmt.fmt.pix.field = V4L2_FIELD_NONE;
+
+        if (-1 == xioctl(device_fd, VIDIOC_S_FMT, &fmt))
+			throw std::runtime_error("Error with VIDIOC_S_FMT");
+    }
+
+    CLEAR(req);
+
+    req.count = NUM_DEVICE_BUFFERS;
+    req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    req.memory = V4L2_MEMORY_MMAP;
+
+    if (-1 == xioctl( device_fd, VIDIOC_REQBUFS, &req))
+	{
+		if (EINVAL == errno)
+			throw std::runtime_error("Does not support memory map");
+
+		throw std::runtime_error("Error with VIDIOC_REQBUFS");
+	}
+
+    if (req.count < 2)
+		throw std::runtime_error("Insufficient buffer memory");
+
+    for ( n_buffers = 0; n_buffers < req.count; ++n_buffers )
+    {
+        struct v4l2_buffer buf;
+
+        CLEAR(buf);
+
+        buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        buf.memory = V4L2_MEMORY_MMAP;
+        buf.index = n_buffers;
+
+        if (-1 == xioctl( device_fd, VIDIOC_QUERYBUF, &buf))
+			throw std::runtime_error("Error with VIDIOC_QUERYBUF");
+
+        deviceBuffers[n_buffers].size = buf.length;
+        deviceBuffers[n_buffers].mem =
+            mmap(NULL /* start anywhere */,
+                 buf.length,
+                 PROT_READ | PROT_WRITE /* required */,
+                 MAP_SHARED /* recommended */,
+                 device_fd, buf.m.offset);
+
+        if (MAP_FAILED == deviceBuffers[n_buffers].mem)
+			throw std::runtime_error("Memory map failed");
+    }
+}
+
+void SentinelCamera::uninitDevice()
+{
+    for ( unsigned int i = 0; i < n_buffers; ++i)
+	{
+        if (-1 == munmap(deviceBuffers[i].mem, deviceBuffers[i].size))
+			throw std::runtime_error("Failed munmap");
+	}
+}
+
+void SentinelCamera::startDeviceCapture()
+{
+    enum v4l2_buf_type type;
+
+    for ( unsigned int i = 0; i < n_buffers; ++i)
+    {
+        v4l2_buffer buf;
+
+        CLEAR(buf);
+        buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        buf.memory = V4L2_MEMORY_MMAP;
+        buf.index = i;
+
+        if (-1 == xioctl(device_fd, VIDIOC_QBUF, &buf))
+			throw std::runtime_error( "Error with VIDIOC_QBUF");
+    }
+
+    type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    if (-1 == xioctl(device_fd, VIDIOC_STREAMON, &type))
+		throw std::runtime_error("Error with VIDIOC_STREAMON");
+}
+
+void SentinelCamera::stopDeviceCapture()
+{
+    enum v4l2_buf_type type;
+
+    type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    if (-1 == xioctl(device_fd, VIDIOC_STREAMOFF, &type))
+		throw std::runtime_error("Error with VIDIOC_STREAMOFF");
+}
+
+bool SentinelCamera::isIDR(const unsigned char *p, int size)
+{
+    unsigned int word = 0xffffffff;
+    int i;
+
+    for (i = 0; i < size; ++i)
+    {
+        unsigned int c = p[i];
+        if (word == 1)
+        {
+            c &= 0x0f;
+
+            if (c == 1)
+                return false;
+
+            if (c == 5)
+                return true;
+        }
+
+        word = (word << 8) | c;
+    }
+
+    return false;
+}
+
+
+void SentinelCamera::deviceCaptureThread()
+{
+    v4l2_buffer buf;
+	pollfd fds[1];
+	int timeout_msecs = 2000;
+
+	metaWriteIndex = 0;
+	int offset = 0;
+
+    CLEAR(buf);
+
+    buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    buf.memory = V4L2_MEMORY_MMAP;
+
+	fds[0].fd = device_fd;
+	fds[0].events = POLLIN;
+
+	for (;;)
+	{
+		int ret = poll(fds,1,timeout_msecs);
+		if ( ret == -1 )
+			throw std::runtime_error("Poll error");
+
+		if ( ret == 0 )
+		{
+			std::cerr << "Poll timeout" << std::endl;
+			continue;
+		}
+
+    	if (-1 == xioctl(device_fd, VIDIOC_DQBUF, &buf))
+    	{
+			if ( errno == EAGAIN )
+				continue;
+
+			throw std::runtime_error("Error with VIDIOC_DQBUF");
+    	}
+
+		// If remaining storage is insufficient, start overwriting storage from the beginning
+		if ( offset + buf.bytesused > STORAGE_SIZE )
+		{
+			offset = 0;
+			std::cerr << "Storage full" << std::endl;
+		}
+
+		// Write H264 frame to ram storage
+		memcpy(storage+offset,deviceBuffers[buf.index].mem,buf.bytesused);
+
+		StorageMeta meta;
+		meta.offset = offset;
+		meta.size = buf.bytesused;
+		meta.timestamp_us = buf.timestamp.tv_sec * 1000000.0 + buf.timestamp.tv_usec;
+		meta.key_frame = isIDR(storage+offset, buf.bytesused);
+
+		std::cerr << meta.size << " " << meta.timestamp_us << std::endl;
+
+		if ( meta.key_frame )
+			std::cerr << "Key frame: " << meta.timestamp_us << std::endl;
+
+		offset += buf.bytesused;
+
+		storageMetas[metaWriteIndex] = meta;
+
+		meta_write_mutex.lock();
+		metaWriteIndex = (metaWriteIndex + 1) % NUM_STORAGE_META;
+		meta_write_mutex.unlock();
+
+    	if (-1 == xioctl(device_fd, VIDIOC_QBUF, &buf))
+			throw std::runtime_error("Error with VIDIOC_QBUF");
+	}
+}
+
 void SentinelCamera::requestComplete(Request* request)
 {
 	if (request->status() == Request::RequestCancelled)
@@ -193,24 +476,24 @@ void SentinelCamera::requestThread()
 			completedRequests.pop_front();
 		}
 
-	    const Request::BufferMap &buffers = request->buffers();
+	    // const Request::BufferMap &buffers = request->buffers();
 
-	    for (auto bufferPair : buffers) 
-        {
-		    const libcamera::Stream *stream = bufferPair.first;
-		    std::string config = stream->configuration().toString();
-		    FrameBuffer *buffer = bufferPair.second;
-		    const FrameMetadata &metadata = buffer->metadata();
-		    size_t frameSize = metadata.planes()[0].bytesused;
+	    // for (auto bufferPair : buffers) 
+        // {
+		    // const libcamera::Stream *stream = bufferPair.first;
+		    // std::string config = stream->configuration().toString();
+		    // FrameBuffer *buffer = bufferPair.second;
+		    // const FrameMetadata &metadata = buffer->metadata();
+		    // size_t frameSize = metadata.planes()[0].bytesused;
 
-		    int fd = buffer->planes()[0].fd.fd();
-		    int64_t timestamp_us = metadata.timestamp / 1000;
+		    // int fd = buffer->planes()[0].fd.fd();
+		    // int64_t timestamp_us = metadata.timestamp / 1000;
 
-		    if ( config == "1920x1080-YUV420" )
-		    	encodeBuffer( fd, frameSize*3/2, timestamp_us );
-			else if ( config == "640x360-YUV420" )
-				fillCheckBuffer( fd, timestamp_us );
-	    }
+		    // if ( config == "1920x1080-YUV420" )
+		    // 	encodeBuffer( fd, frameSize*3/2, timestamp_us );
+			// else if ( config == "640x360-YUV420" )
+			// 	fillCheckBuffer( fd, timestamp_us );
+	    // }
 
 	    // Re-queue the Request to the camera.
 	    request->reuse(Request::ReuseBuffers);
@@ -239,6 +522,28 @@ void SentinelCamera::fillCheckBuffer( int fd, int64_t timestamp_us )
 	checkCondition.notify_one();
 }
 
+constexpr uint32_t my_fourcc(char a, char b, char c, char d)
+{
+	return (static_cast<uint32_t>(a) <<  0) |
+	       (static_cast<uint32_t>(b) <<  8) |
+	       (static_cast<uint32_t>(c) << 16) |
+	       (static_cast<uint32_t>(d) << 24);
+}
+
+void SentinelCamera::start2()
+{
+	running = true;
+
+	openDevice("/dev/video0");
+	initDevice();
+	startDeviceCapture();
+
+	storage = new unsigned char[STORAGE_SIZE];
+	device_thread = thread( &SentinelCamera::deviceCaptureThread, this );
+
+	device_thread.join();
+}
+
 void SentinelCamera::start()
 {
 	if ( running )
@@ -246,6 +551,9 @@ void SentinelCamera::start()
 
     cm = new CameraManager();
     cm->start();
+
+	int count = cm->cameras().size();
+	std::cout << "Camera count: " << count << std::endl;
 
     if ( cm->cameras().empty() )
     {
@@ -2095,6 +2403,13 @@ void runSingle( int frame_count, int force_count, int noise_level )
 	sentinelCamera.completeShutdown();
 }
 
+void runUsbTest()
+{
+	SentinelCamera sentinelCamera;
+
+	sentinelCamera.start2();
+}
+
 void runDecoderTest( string path )
 {	
 	SentinelCamera camera;
@@ -2111,6 +2426,7 @@ int main( int argc, char **argv )
 {
 	bool decoder_test = false;
 	bool analysis_test = false;
+	bool usb_test = false;
 	bool socket_interface = false;
 	int frame_count = 300;
 	int force_count = 200;
@@ -2119,11 +2435,12 @@ int main( int argc, char **argv )
 
 	int opt;
 
-	while ((opt = getopt(argc, argv, "a:sd:c:f:n:")) != -1)
+	while ((opt = getopt(argc, argv, "a:usd:c:f:n:")) != -1)
 	{
 		switch ( opt )
 		{
 			case 'a': analysis_test = true; path = optarg; break;
+			case 'u': usb_test = true; break;
 			case 's': socket_interface = true; break;
 			case 'd': decoder_test = true; path = optarg; break;
 			case 'c': frame_count = std::stoi( optarg ); break;
@@ -2136,6 +2453,8 @@ int main( int argc, char **argv )
 		runDecoderTest( path );
 	else if ( analysis_test )
 		runAnalysisTest( path );
+	else if ( usb_test )
+		runUsbTest();
 	else if ( socket_interface )
 		runSocket();
 	else
