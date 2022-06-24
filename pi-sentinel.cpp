@@ -1,5 +1,6 @@
 #include <chrono>
 #include <iostream>
+#include <iomanip>
 #include <fstream>
 #include <sstream>
 #include <sys/ioctl.h>
@@ -402,21 +403,21 @@ void SentinelCamera::deviceCaptureThread()
 	}
 }
 
-void SentinelCamera::requestComplete(Request* request)
-{
-	if (request->status() == Request::RequestCancelled)
-		return;
+// void SentinelCamera::requestComplete(Request* request)
+// {
+// 	if (request->status() == Request::RequestCancelled)
+// 		return;
 
-    SentinelCamera* sc = cameraVector[request->cookie()];
+//     SentinelCamera* sc = cameraVector[request->cookie()];
 
-	sc->requestMutex.lock();
-	sc->completedRequests.push_back(request);
-	sc->requestMutex.unlock();
+// 	sc->requestMutex.lock();
+// 	sc->completedRequests.push_back(request);
+// 	sc->requestMutex.unlock();
 
-	sc->requestCondition.notify_one();
+// 	sc->requestCondition.notify_one();
 
-    // std::cerr << "requestComplete" << std::endl;
-}
+//     // std::cerr << "requestComplete" << std::endl;
+// }
 
 void SentinelCamera::syncTime()
 {
@@ -444,66 +445,66 @@ void SentinelCamera::syncTime()
 	}
 }
 
-void SentinelCamera::requestThread()
-{
+// void SentinelCamera::requestThread()
+// {
 
-    abortRequestThread = false;
-	int frame_count = 0;
-	Request* request;
+//     abortRequestThread = false;
+// 	int frame_count = 0;
+// 	Request* request;
 
-    for (;;)
-    {
-		++frame_count;
-		if ( max_frame_count != 0 && frame_count > max_frame_count )
-			abortRequestThread = true;
+//     for (;;)
+//     {
+// 		++frame_count;
+// 		if ( max_frame_count != 0 && frame_count > max_frame_count )
+// 			abortRequestThread = true;
 
-		if ( (frame_count % 60) == 0 )
-			syncTime();
+// 		if ( (frame_count % 60) == 0 )
+// 			syncTime();
 
-		{
-			std::unique_lock<std::mutex> locker(requestMutex);
-			requestCondition.wait_for( locker, 200ms, [this]() {
-				return !this->completedRequests.empty() || abortRequestThread;
-			});
+// 		{
+// 			std::unique_lock<std::mutex> locker(requestMutex);
+// 			requestCondition.wait_for( locker, 200ms, [this]() {
+// 				return !this->completedRequests.empty() || abortRequestThread;
+// 			});
 
-        	if ( abortRequestThread )
-				return;
+//         	if ( abortRequestThread )
+// 				return;
 
-			if ( completedRequests.empty() )
-				continue;
+// 			if ( completedRequests.empty() )
+// 				continue;
 
-			request = completedRequests.front();
-			completedRequests.pop_front();
-		}
+// 			request = completedRequests.front();
+// 			completedRequests.pop_front();
+// 		}
 
-	    // const Request::BufferMap &buffers = request->buffers();
+// 	    // const Request::BufferMap &buffers = request->buffers();
 
-	    // for (auto bufferPair : buffers) 
-        // {
-		    // const libcamera::Stream *stream = bufferPair.first;
-		    // std::string config = stream->configuration().toString();
-		    // FrameBuffer *buffer = bufferPair.second;
-		    // const FrameMetadata &metadata = buffer->metadata();
-		    // size_t frameSize = metadata.planes()[0].bytesused;
+// 	    // for (auto bufferPair : buffers) 
+//         // {
+// 		    // const libcamera::Stream *stream = bufferPair.first;
+// 		    // std::string config = stream->configuration().toString();
+// 		    // FrameBuffer *buffer = bufferPair.second;
+// 		    // const FrameMetadata &metadata = buffer->metadata();
+// 		    // size_t frameSize = metadata.planes()[0].bytesused;
 
-		    // int fd = buffer->planes()[0].fd.fd();
-		    // int64_t timestamp_us = metadata.timestamp / 1000;
+// 		    // int fd = buffer->planes()[0].fd.fd();
+// 		    // int64_t timestamp_us = metadata.timestamp / 1000;
 
-		    // if ( config == "1920x1080-YUV420" )
-		    // 	encodeBuffer( fd, frameSize*3/2, timestamp_us );
-			// else if ( config == "640x360-YUV420" )
-			// 	fillCheckBuffer( fd, timestamp_us );
-	    // }
+// 		    // if ( config == "1920x1080-YUV420" )
+// 		    // 	encodeBuffer( fd, frameSize*3/2, timestamp_us );
+// 			// else if ( config == "640x360-YUV420" )
+// 			// 	fillCheckBuffer( fd, timestamp_us );
+// 	    // }
 
-	    // Re-queue the Request to the camera.
-	    request->reuse(Request::ReuseBuffers);
-	    int check = camera->queueRequest(request);
-		if ( check != 0 )
-			std::cerr << "Queue request failed" << std::endl;
+// 	    // Re-queue the Request to the camera.
+// 	    request->reuse(Request::ReuseBuffers);
+// 	    int check = camera->queueRequest(request);
+// 		if ( check != 0 )
+// 			std::cerr << "Queue request failed" << std::endl;
 
-		// std::cerr << "requestThread" << std::endl;
-    }
-}
+// 		// std::cerr << "requestThread" << std::endl;
+//     }
+// }
 
 void SentinelCamera::fillCheckBuffer( int fd, int64_t timestamp_us )
 {
@@ -544,116 +545,116 @@ void SentinelCamera::start2()
 	device_thread.join();
 }
 
-void SentinelCamera::start()
-{
-	if ( running )
-		return;
+// void SentinelCamera::start()
+// {
+// 	if ( running )
+// 		return;
 
-    cm = new CameraManager();
-    cm->start();
+//     cm = new CameraManager();
+//     cm->start();
 
-	int count = cm->cameras().size();
-	std::cout << "Camera count: " << count << std::endl;
+// 	int count = cm->cameras().size();
+// 	std::cout << "Camera count: " << count << std::endl;
 
-    if ( cm->cameras().empty() )
-    {
-        cm->stop();
-        throw std::runtime_error("No cameras were identified on the system");
-    }
+//     if ( cm->cameras().empty() )
+//     {
+//         cm->stop();
+//         throw std::runtime_error("No cameras were identified on the system");
+//     }
 
-	std::string cameraId = cm->cameras()[0]->id();
-	camera = cm->get(cameraId);
-	camera->acquire();
+// 	std::string cameraId = cm->cameras()[0]->id();
+// 	camera = cm->get(cameraId);
+// 	camera->acquire();
 
-    // Setup the VideoRecording stream to produce the encoded archive files
-    // and the ViewFinder stream to produce the frames used for event triggering
-    config = camera->generateConfiguration( { StreamRole::VideoRecording, StreamRole::Viewfinder } );
+//     // Setup the VideoRecording stream to produce the encoded archive files
+//     // and the ViewFinder stream to produce the frames used for event triggering
+//     config = camera->generateConfiguration( { StreamRole::VideoRecording, StreamRole::Viewfinder } );
 
-	StreamConfiguration &streamConfig1 = config->at(0);
-	StreamConfiguration &streamConfig2 = config->at(1);
+// 	StreamConfiguration &streamConfig1 = config->at(0);
+// 	StreamConfiguration &streamConfig2 = config->at(1);
 
-	streamConfig2.size.width = 640;
-	streamConfig2.size.height = 360;
-	streamConfig2.pixelFormat = libcamera::formats::YUV420;
+// 	streamConfig2.size.width = 640;
+// 	streamConfig2.size.height = 360;
+// 	streamConfig2.pixelFormat = libcamera::formats::YUV420;
 
-	camera->configure(config.get());
+// 	camera->configure(config.get());
 
-	allocator = new FrameBufferAllocator(camera);
+// 	allocator = new FrameBufferAllocator(camera);
 
-	for (StreamConfiguration &cfg : *config) 
-    {
-		int ret = allocator->allocate(cfg.stream());
-		if ( ret < 0 ) 
-            throw std::runtime_error("Can't allocate buffers");
-	}
+// 	for (StreamConfiguration &cfg : *config) 
+//     {
+// 		int ret = allocator->allocate(cfg.stream());
+// 		if ( ret < 0 ) 
+//             throw std::runtime_error("Can't allocate buffers");
+// 	}
 
-	Stream *stream1 = streamConfig1.stream();
-	Stream *stream2 = streamConfig2.stream();
+// 	Stream *stream1 = streamConfig1.stream();
+// 	Stream *stream2 = streamConfig2.stream();
 
-	const std::vector<std::unique_ptr<FrameBuffer>> &buffers1 = allocator->buffers(stream1);
-	const std::vector<std::unique_ptr<FrameBuffer>> &buffers2 = allocator->buffers(stream2);
+// 	const std::vector<std::unique_ptr<FrameBuffer>> &buffers1 = allocator->buffers(stream1);
+// 	const std::vector<std::unique_ptr<FrameBuffer>> &buffers2 = allocator->buffers(stream2);
 
-	requests.clear();
+// 	requests.clear();
 
-	std::cerr << "Camera buffers: " << buffers1.size() << std::endl;
+// 	std::cerr << "Camera buffers: " << buffers1.size() << std::endl;
 
-	for (unsigned int i = 0; i < buffers1.size(); ++i) 
-    {
-		std::unique_ptr<Request> request = camera->createRequest( id );
-		if ( !request )
-            throw std::runtime_error("Can't create request");
+// 	for (unsigned int i = 0; i < buffers1.size(); ++i) 
+//     {
+// 		std::unique_ptr<Request> request = camera->createRequest( id );
+// 		if ( !request )
+//             throw std::runtime_error("Can't create request");
 
-		const std::unique_ptr<FrameBuffer> &buffer1 = buffers1[i];
-		int ret = request->addBuffer(stream1, buffer1.get());
-		if ( ret < 0 )
-            throw std::runtime_error("Can't set buffer for request");
+// 		const std::unique_ptr<FrameBuffer> &buffer1 = buffers1[i];
+// 		int ret = request->addBuffer(stream1, buffer1.get());
+// 		if ( ret < 0 )
+//             throw std::runtime_error("Can't set buffer for request");
 
-		const std::unique_ptr<FrameBuffer> &buffer2 = buffers2[i];
-		ret = request->addBuffer(stream2, buffer2.get());
-		if ( ret < 0 )
-            throw std::runtime_error("Can't set buffer for request");
+// 		const std::unique_ptr<FrameBuffer> &buffer2 = buffers2[i];
+// 		ret = request->addBuffer(stream2, buffer2.get());
+// 		if ( ret < 0 )
+//             throw std::runtime_error("Can't set buffer for request");
 
 
-		requests.push_back(std::move(request));
-	}
+// 		requests.push_back(std::move(request));
+// 	}
 
-    camera->requestCompleted.connect(requestComplete);
-	while ( !input_buffers_available.empty() )
-		input_buffers_available.pop();
+//     camera->requestCompleted.connect(requestComplete);
+// 	while ( !input_buffers_available.empty() )
+// 		input_buffers_available.pop();
 
-	for ( int i = 0; i < NUM_CHECK_BUFFERS; ++i )
-	{
-		checkBuffers[i].mem = new unsigned char[CHECK_FRAME_SIZE];
-		checkBuffers[i].timestamp_us = 0;
-	}
+// 	for ( int i = 0; i < NUM_CHECK_BUFFERS; ++i )
+// 	{
+// 		checkBuffers[i].mem = new unsigned char[CHECK_FRAME_SIZE];
+// 		checkBuffers[i].timestamp_us = 0;
+// 	}
 
-	createEncoder();
+// 	createEncoder();
 
-	completedRequests.clear();
+// 	completedRequests.clear();
 
-    request_thread = thread( &SentinelCamera::requestThread, this );
-    poll_thread = thread( &SentinelCamera::pollThread, this );
-    output_thread = thread( &SentinelCamera::outputThread, this );
-	check_thread = thread( &SentinelCamera::checkThread, this );
-	event_thread = thread( &SentinelCamera::eventThread, this );
+//     request_thread = thread( &SentinelCamera::requestThread, this );
+//     poll_thread = thread( &SentinelCamera::pollThread, this );
+//     output_thread = thread( &SentinelCamera::outputThread, this );
+// 	check_thread = thread( &SentinelCamera::checkThread, this );
+// 	event_thread = thread( &SentinelCamera::eventThread, this );
 
-	//
-    // Set frame rate to 30/sec
-    //
-	ControlList controls;
-	int64_t frame_time = 1000000 / 30; // in us
-	controls.set(controls::FrameDurationLimits, { frame_time, frame_time });
-	controls.set(controls::AnalogueGain, 30.0);
+// 	//
+//     // Set frame rate to 30/sec
+//     //
+// 	ControlList controls;
+// 	int64_t frame_time = 1000000 / 30; // in us
+// 	controls.set(controls::FrameDurationLimits, { frame_time, frame_time });
+// 	controls.set(controls::AnalogueGain, 30.0);
 
-	camera->start( &controls );
-	for (std::unique_ptr<Request> &request : requests)
-	{
-		request->reuse(Request::ReuseBuffers);
-		camera->queueRequest(request.get());
-	}
+// 	camera->start( &controls );
+// 	for (std::unique_ptr<Request> &request : requests)
+// 	{
+// 		request->reuse(Request::ReuseBuffers);
+// 		camera->queueRequest(request.get());
+// 	}
 
-	running = true;
-}
+// 	running = true;
+// }
 
 void SentinelCamera::initiateShutdown()
 {
@@ -687,24 +688,24 @@ void SentinelCamera::completeShutdown()
 	check_thread.join();
 	event_thread.join();
 
-    camera->stop();
+    // camera->stop();
 
-	close(encoder_fd);
+	// close(encoder_fd);
 
-    for ( StreamConfiguration &cfg : *config ) 
-    {
-        allocator->free(cfg.stream());
-    }
+    // for ( StreamConfiguration &cfg : *config ) 
+    // {
+    //     allocator->free(cfg.stream());
+    // }
 
-	delete allocator;
-	camera->release();
-	camera.reset();
-	cm->stop();
+	// delete allocator;
+	// camera->release();
+	// camera.reset();
+	// cm->stop();
 
 	for ( int i = 0; i < NUM_CHECK_BUFFERS; ++i )
 		delete[] checkBuffers[i].mem;
 
-	delete cm;
+	// delete cm;
 }
 
 void SentinelCamera::stop()

@@ -14,10 +14,9 @@ src_files = files([
 # Point your PKG_CONFIG_PATH environment variable to the
 # libcamera install path libcamera.pc file ($prefix/lib/pkgconfig/libcamera.pc)
 deps = [
-      dependency('libcamera', required : true),
       dependency('threads'),
 	  dependency('libv4l2'),
-	  dependency('libjpeg'),
+#	  dependency('libjpeg'),
 ]
 
 cpp_arguments = [ '-Wno-unused-parameter', '-Wno-psabi', ]

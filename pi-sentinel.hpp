@@ -18,9 +18,8 @@
 #include <functional>
 
 #include <linux/videodev2.h>
-#include <libcamera/libcamera.h>
 
-using namespace libcamera;
+// using namespace libcamera;
 using std::mutex;
 using std::condition_variable;
 using std::vector;
@@ -83,17 +82,17 @@ class SentinelCamera
 {
 private:
 
-    CameraManager* cm;
-    std::shared_ptr<Camera> camera;
-    std::unique_ptr<CameraConfiguration> config;
-    FrameBufferAllocator *allocator;
+    // CameraManager* cm;
+    // std::shared_ptr<Camera> camera;
+    // std::unique_ptr<CameraConfiguration> config;
+    // FrameBufferAllocator *allocator;
     int id;
     int encoder_fd;
     int decoder_fd;
     int device_fd;
     unsigned int n_buffers;
 
-    deque<Request*> completedRequests;
+    // deque<Request*> completedRequests;
     mutex requestMutex;
     condition_variable requestCondition;
     bool abortRequestThread;
@@ -102,7 +101,7 @@ private:
     bool abortPoll;
     bool abortOutput;
 
-	vector<std::unique_ptr<Request>> requests;
+	// vector<std::unique_ptr<Request>> requests;
     thread request_thread;
     thread poll_thread;
     thread output_thread;
@@ -212,7 +211,7 @@ public:
     string secondsString( int64_t timestamp_us );
     string dateTimeString( int64_t timestamp_us );
 
-    static void requestComplete(Request* request);
+    // static void requestComplete(Request* request);
 
     bool running;
     int noise_level;
