@@ -723,7 +723,7 @@ void SentinelCamera::stop()
 	running = false;
 }
 
-int SentinelCamera::xioctl(int fd, unsigned long ctl, void *arg)
+int SentinelCamera::xioctl(int fd, int ctl, void *arg)
 {
 	int ret, num_tries = 10;
 	do

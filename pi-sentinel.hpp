@@ -181,7 +181,7 @@ public:
     void initiateShutdown();
     void completeShutdown();
     void stop();
-    int xioctl(int fd, unsigned long ctl, void *arg);
+    int xioctl(int fd, int ctl, void *arg);
     void createEncoder();
     void createDecoder();
     void encodeBuffer(int fd, size_t size, int64_t timestamp_us);
