@@ -535,7 +535,7 @@ void SentinelCamera::start2()
 {
 	running = true;
 
-	openDevice("/dev/video0");
+	openDevice("/dev/video2");
 	initDevice();
 	startDeviceCapture();
 
@@ -543,6 +543,11 @@ void SentinelCamera::start2()
 	device_thread = thread( &SentinelCamera::deviceCaptureThread, this );
 
 	device_thread.join();
+}
+
+void SentinelCamera::start()
+{
+
 }
 
 // void SentinelCamera::start()

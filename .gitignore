@@ -11,3 +11,4 @@
 *.json
 *.csv
 *.tmp
+.vscode
