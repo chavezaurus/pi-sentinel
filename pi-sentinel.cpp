@@ -18,8 +18,6 @@
 #include <list>
 #include <filesystem>
 
-#include "bcm_host.h"
-
 #include "pi-sentinel.hpp"
 
 using namespace std::chrono_literals;
@@ -212,18 +210,13 @@ void SentinelCamera::initDevice()
     if (-1 == xioctl(device_fd, VIDIOC_G_FMT, &fmt))
 		throw std::runtime_error("Error with VIDIOC_G_FMT");
 
-    if ( fmt.fmt.pix.width != 1920 ||
-         fmt.fmt.pix.height != 1080 ||
-         fmt.fmt.pix.pixelformat != V4L2_PIX_FMT_H264 )
-    {
-        fmt.fmt.pix.width = 1920;
-        fmt.fmt.pix.height = 1080;
-        fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_H264;
-        fmt.fmt.pix.field = V4L2_FIELD_NONE;
+    fmt.fmt.pix.width = 1920;
+    fmt.fmt.pix.height = 1080;
+    fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_H264;
+    fmt.fmt.pix.field = V4L2_FIELD_NONE;
 
-        if (-1 == xioctl(device_fd, VIDIOC_S_FMT, &fmt))
-			throw std::runtime_error("Error with VIDIOC_S_FMT");
-    }
+    if (-1 == xioctl(device_fd, VIDIOC_S_FMT, &fmt))
+		throw std::runtime_error("Error with VIDIOC_S_FMT");
 
     CLEAR(req);
 
@@ -440,6 +433,12 @@ void SentinelCamera::decoderThread()
 
 void SentinelCamera::deviceCaptureThread()
 {
+	openDevice("/dev/video2");
+	initDevice();
+	startDeviceCapture();
+
+	storage = new unsigned char[STORAGE_SIZE];
+
     v4l2_buffer buf;
 	pollfd fds[1];
 	int timeout_msecs = 2000;
@@ -642,11 +641,6 @@ void SentinelCamera::start2()
 {
 	running = true;
 
-	openDevice("/dev/video2");
-	initDevice();
-	startDeviceCapture();
-
-	storage = new unsigned char[STORAGE_SIZE];
 	device_thread = thread( &SentinelCamera::deviceCaptureThread, this );
 	// decoder_thread = thread( &SentinelCamera::decoderThread, this );
 
@@ -2549,8 +2543,6 @@ int main( int argc, char **argv )
 	int force_count = 200;
 	int noise_level = 50;
 	string path;
-
-	bcm_host_init();
 
 	int opt;
 
