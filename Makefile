@@ -3,8 +3,8 @@ BIN=pi-sentinel.bin
 
 CPPFLAGS+= -g -std=c++17 -Wno-psabi
 #CPPFLAGS+= -O2 -std=c++17 -Wno-psabi
-LDFLAGS+= -lm -lpthread -lstdc++fs -lv4l1 -lv4l2 -ljpeg
-INCLUDES+=
+LDFLAGS+=-L/opt/vc/lib/ -lm -lpthread -lstdc++fs -lv4l1 -lv4l2 -ljpeg -lbcm_host
+INCLUDES+=-I/opt/vc/include/
 
 CC = g++
 

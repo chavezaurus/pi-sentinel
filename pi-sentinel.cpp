@@ -18,6 +18,8 @@
 #include <list>
 #include <filesystem>
 
+#include "bcm_host.h"
+
 #include "pi-sentinel.hpp"
 
 using namespace std::chrono_literals;
@@ -2547,6 +2549,8 @@ int main( int argc, char **argv )
 	int force_count = 200;
 	int noise_level = 50;
 	string path;
+
+	bcm_host_init();
 
 	int opt;
 
