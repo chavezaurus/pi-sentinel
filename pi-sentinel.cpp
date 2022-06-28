@@ -331,6 +331,110 @@ bool SentinelCamera::isIDR(const unsigned char *p, int size)
     return false;
 }
 
+void SentinelCamera::decoderThread()
+{
+	createDecoder();
+
+	abortDecoderThread = 0;
+	metaDecoderIndex = 0;
+
+    auto const coded_buf_type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
+    auto const decoded_buf_type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+    auto const coded_buffers = map_decoder_buffers(coded_buf_type);
+    auto const decoded_buffers = map_decoder_buffers(decoded_buf_type);
+
+    std::vector<MappedBuffer*> coded_free, decoded_free;
+    for (auto const &b : coded_buffers) 
+		coded_free.push_back(b.get());
+    for (auto const &b : decoded_buffers) 
+		decoded_free.push_back(b.get());
+
+    v4l2_plane received_plane = {};
+    v4l2_buffer received = {};
+    received.memory = V4L2_MEMORY_MMAP;
+    received.length = 1;
+    received.m.planes = &received_plane;
+
+    v4l2_decoder_cmd command = {};
+    command.cmd = V4L2_DEC_CMD_START;
+    if (v4l2_ioctl(decoder_fd, VIDIOC_DECODER_CMD, &command)) 
+		throw std::runtime_error("error sending start");
+
+	for (;;)
+	{
+		{
+			std::unique_lock<std::mutex> locker(meta_write_mutex);
+			decoder_cond_var.wait_for( locker, 200ms, [this]() {
+				return abortDecoderThread || metaWriteIndex != metaDecoderIndex;
+			});
+
+			if ( abortDecoderThread )
+				break;
+
+			if ( metaWriteIndex == metaDecoderIndex )
+				continue;
+		}
+
+        // Reclaim coded buffers once consumed by the decoder.
+        received.type = coded_buf_type;
+        while (!v4l2_ioctl(decoder_fd, VIDIOC_DQBUF, &received)) 
+		{
+            if (received.index > coded_buffers.size()) 
+				throw std::runtime_error( "bad reclaimed indes");
+            coded_free.push_back(coded_buffers[received.index].get());
+        }
+        if (errno != EAGAIN)
+			throw std::runtime_error( "error reclaiming coded buffer");
+
+		StorageMeta& meta = storageMetas[metaDecoderIndex];
+		metaDecoderIndex = (metaDecoderIndex+1) % NUM_STORAGE_META;
+
+		unsigned char* ptr = storage + meta.offset;
+		int frameSize = meta.size;
+
+		if ( coded_free.empty() )
+		{
+			std::cerr << "Missed frame" << std::endl;
+			return;
+		}
+
+		auto* coded = coded_free.back();
+		coded_free.pop_back();
+
+		memcpy( coded->mmap, (void *)ptr, frameSize );
+		coded->plane.bytesused = frameSize;
+
+        if (v4l2_ioctl(decoder_fd, VIDIOC_QBUF, &coded->buffer))
+			throw std::runtime_error("error sending coded buffer");
+
+        // Send empty decoded buffers to be filled by the decoder.
+        while (!decoded_free.empty()) 
+		{
+            auto* decoded = decoded_free.back();
+            decoded_free.pop_back();
+
+            if (v4l2_ioctl(decoder_fd, VIDIOC_QBUF, &decoded->buffer))
+				throw std::runtime_error( "error cycling buffer " );
+        }
+
+        // Receive decoded data and return the buffers.
+        received.type = decoded_buf_type;
+        while ( !v4l2_ioctl(decoder_fd, VIDIOC_DQBUF, &received)) 
+		{
+            if (received.index > decoded_buffers.size())
+				throw std::runtime_error( "bad decoded index");
+
+            auto* decoded = decoded_buffers[received.index].get();
+
+			auto* dptr = decoded->mmap;
+            decoded_free.push_back(decoded);
+        }
+        if (errno != EAGAIN)
+			throw std::runtime_error( "error receiving decoded buffers" );
+	}
+
+	stopDecoder();
+}
 
 void SentinelCamera::deviceCaptureThread()
 {
@@ -397,6 +501,7 @@ void SentinelCamera::deviceCaptureThread()
 		meta_write_mutex.lock();
 		metaWriteIndex = (metaWriteIndex + 1) % NUM_STORAGE_META;
 		meta_write_mutex.unlock();
+		decoder_cond_var.notify_one();
 
     	if (-1 == xioctl(device_fd, VIDIOC_QBUF, &buf))
 			throw std::runtime_error("Error with VIDIOC_QBUF");
@@ -541,8 +646,12 @@ void SentinelCamera::start2()
 
 	storage = new unsigned char[STORAGE_SIZE];
 	device_thread = thread( &SentinelCamera::deviceCaptureThread, this );
+	// decoder_thread = thread( &SentinelCamera::decoderThread, this );
 
 	device_thread.join();
+	// decoder_thread.join();
+
+	running = false;
 }
 
 void SentinelCamera::start()

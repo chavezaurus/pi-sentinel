@@ -98,6 +98,7 @@ private:
     bool abortRequestThread;
     bool abortCheckThread;
     bool abortEventThread;
+    bool abortDecoderThread;
     bool abortPoll;
     bool abortOutput;
 
@@ -108,6 +109,7 @@ private:
     thread check_thread;
     thread event_thread;
     thread device_thread;
+    thread decoder_thread;
 
     mutex input_buffers_available_mutex;
     queue<int> input_buffers_available;
@@ -133,7 +135,7 @@ private:
     StorageMeta storageMetas[NUM_STORAGE_META];
     int metaWriteIndex;
     int metaSaveIndex;
-    int metaDecodeIndex;
+    int metaDecoderIndex;
 
     mutex meta_write_mutex;
 
@@ -157,6 +159,8 @@ private:
     condition_variable eventCondition;
     queue<int64_t> eventQueue;
 
+    condition_variable decoder_cond_var;
+
     unsigned char* referenceFrame;
     unsigned char* maskFrame;
 
@@ -175,6 +179,7 @@ public:
     void startDeviceCapture();
     void stopDeviceCapture();
     void deviceCaptureThread();
+    void decoderThread();
 
     void start();
     void start2();
