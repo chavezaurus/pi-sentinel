@@ -47,6 +47,7 @@ struct StorageMeta
     unsigned int offset;
     unsigned int size;
     int64_t timestamp_us;
+    int signalAmplitude;
     bool key_frame;
 };
 
@@ -134,10 +135,10 @@ private:
 
     StorageMeta storageMetas[NUM_STORAGE_META];
     int metaWriteIndex;
-    int metaSaveIndex;
-    int metaDecoderIndex;
+    int metaCheckIndex;
 
     mutex meta_write_mutex;
+    mutex meta_check_mutex;
 
     map<int,void*> mappedBuffers;
 
@@ -175,12 +176,14 @@ public:
     void pollThread();
     void outputThread();
     void checkThread();
+    void checkThread2();
     void eventThread();
     void startDeviceCapture();
     void stopDeviceCapture();
     void deviceCaptureThread();
     void decoderThread();
 
+    int signalAmplitude( unsigned char* pstart );
     void start();
     void start2();
     void initiateShutdown();

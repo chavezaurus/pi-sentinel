@@ -21,6 +21,7 @@
 #include "pi-sentinel.hpp"
 
 using namespace std::chrono_literals;
+using namespace std::chrono;
 
 #define SOCKET_NAME "/tmp/sentinel.sock"
 #define CLEAR(x) memset(&(x), 0, sizeof(x))
@@ -104,7 +105,7 @@ SentinelCamera::SentinelCamera()
 	max_frame_count = 0;
 	checkBufferHead = 0;
 	checkBufferTail = 0;
-	noise_level = 30;
+	noise_level = 45;
 	moonx = 0;
 	moony = 0;
 	force_count = 0;
@@ -326,12 +327,58 @@ bool SentinelCamera::isIDR(const unsigned char *p, int size)
     return false;
 }
 
+int SentinelCamera::signalAmplitude( unsigned char* pstart )
+{
+    int sum = 0;
+
+    unsigned char *p = pstart + 1920 + 1;
+    unsigned char *pvend = pstart + 1920 * 1080;
+    unsigned char *psend = pstart + 1920 + 1920;
+
+    unsigned char *pRef = referenceFrame;
+    unsigned char *pMask = maskFrame;
+
+    while (p < pvend)
+    {
+        while (p < psend)
+        {
+            int c = *p;
+
+            int test = c - *pRef - *pMask++;
+            if (test > 0)
+                sum += test;
+
+            p += 3;
+
+        	int n = *pRef;
+        	n *= 15;
+        	n += c;
+        	n >>= 4;
+
+        	*pRef++ = n;
+        }
+
+        p += 3840;
+        psend += 5760;
+    }
+
+	return sum;
+}
+
 void SentinelCamera::decoderThread()
 {
 	createDecoder();
 
 	abortDecoderThread = 0;
-	metaDecoderIndex = 0;
+	int decoderIndex = 0;
+
+	referenceFrame = new unsigned char[CHECK_FRAME_SIZE];
+	maskFrame      = new unsigned char[CHECK_FRAME_SIZE];
+
+	memset(referenceFrame, 0xff, CHECK_FRAME_SIZE);
+	memset(maskFrame, noise_level, CHECK_FRAME_SIZE);
+
+	readMask();
 
     auto const coded_buf_type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
     auto const decoded_buf_type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
@@ -359,14 +406,14 @@ void SentinelCamera::decoderThread()
 	{
 		{
 			std::unique_lock<std::mutex> locker(meta_write_mutex);
-			decoder_cond_var.wait_for( locker, 200ms, [this]() {
-				return abortDecoderThread || metaWriteIndex != metaDecoderIndex;
+			decoder_cond_var.wait_for( locker, 200ms, [this,decoderIndex]() {
+				return abortDecoderThread || (metaWriteIndex != decoderIndex);
 			});
 
 			if ( abortDecoderThread )
 				break;
 
-			if ( metaWriteIndex == metaDecoderIndex )
+			if ( metaWriteIndex == decoderIndex )
 				continue;
 		}
 
@@ -375,29 +422,33 @@ void SentinelCamera::decoderThread()
         while (!v4l2_ioctl(decoder_fd, VIDIOC_DQBUF, &received)) 
 		{
             if (received.index > coded_buffers.size()) 
-				throw std::runtime_error( "bad reclaimed indes");
+				throw std::runtime_error( "bad reclaimed index");
             coded_free.push_back(coded_buffers[received.index].get());
+			// std::cerr << "coded DQ " << coded_free.size() << std::endl;
         }
         if (errno != EAGAIN)
 			throw std::runtime_error( "error reclaiming coded buffer");
 
-		StorageMeta& meta = storageMetas[metaDecoderIndex];
-		metaDecoderIndex = (metaDecoderIndex+1) % NUM_STORAGE_META;
+		if ( coded_free.empty() )
+		{
+			std::cerr << "Decoder not ready for frame" << std::endl;
+			usleep(30000);
+			continue;
+		}
+
+		StorageMeta& meta = storageMetas[decoderIndex];
 
 		unsigned char* ptr = storage + meta.offset;
 		int frameSize = meta.size;
 
-		if ( coded_free.empty() )
-		{
-			std::cerr << "Missed frame" << std::endl;
-			return;
-		}
-
 		auto* coded = coded_free.back();
 		coded_free.pop_back();
+		std::cerr << "coded Q " << decoderIndex << std::endl;
 
 		memcpy( coded->mmap, (void *)ptr, frameSize );
 		coded->plane.bytesused = frameSize;
+
+		decoderIndex = (decoderIndex+1) % NUM_STORAGE_META;
 
         if (v4l2_ioctl(decoder_fd, VIDIOC_QBUF, &coded->buffer))
 			throw std::runtime_error("error sending coded buffer");
@@ -407,6 +458,7 @@ void SentinelCamera::decoderThread()
 		{
             auto* decoded = decoded_free.back();
             decoded_free.pop_back();
+			// std::cerr << "decoded Q " <<  decoded_free.size() << std::endl;
 
             if (v4l2_ioctl(decoder_fd, VIDIOC_QBUF, &decoded->buffer))
 				throw std::runtime_error( "error cycling buffer " );
@@ -414,6 +466,7 @@ void SentinelCamera::decoderThread()
 
         // Receive decoded data and return the buffers.
         received.type = decoded_buf_type;
+		int count = 0;
         while ( !v4l2_ioctl(decoder_fd, VIDIOC_DQBUF, &received)) 
 		{
             if (received.index > decoded_buffers.size())
@@ -421,14 +474,42 @@ void SentinelCamera::decoderThread()
 
             auto* decoded = decoded_buffers[received.index].get();
 
-			auto* dptr = decoded->mmap;
-            decoded_free.push_back(decoded);
+			unsigned char* dptr = (unsigned char *)decoded->mmap;
+
+			// auto start_timer = high_resolution_clock::now();
+			int sa = signalAmplitude( dptr );
+			auto stop_timer = high_resolution_clock::now();
+			// auto duration = duration_cast<microseconds>(stop_timer - start_timer);	
+			// std::cerr << "Duration: " << duration.count() << std::endl;
+
+			storageMetas[metaCheckIndex].signalAmplitude = sa;
+
+            // decoded_free.push_back(decoded);
+			std::cerr << "decoded DQ " << metaCheckIndex << " " 
+					  << sa << std::endl;
+
+			meta_check_mutex.lock();
+			metaCheckIndex = (metaCheckIndex+1) % NUM_STORAGE_META;
+			meta_check_mutex.unlock();
+
+			checkCondition.notify_one();
+
+            if (v4l2_ioctl(decoder_fd, VIDIOC_QBUF, &decoded->buffer))
+				throw std::runtime_error( "error cycling buffer " );
+
+			// std::cerr << "decoded Q " <<  decoded_free.size() << std::endl;
+
+			if ( ++count > 2 )
+				break;
         }
         if (errno != EAGAIN)
 			throw std::runtime_error( "error receiving decoded buffers" );
 	}
 
 	stopDecoder();
+
+	delete [] referenceFrame;
+	delete [] maskFrame;
 }
 
 void SentinelCamera::deviceCaptureThread()
@@ -443,7 +524,6 @@ void SentinelCamera::deviceCaptureThread()
 	pollfd fds[1];
 	int timeout_msecs = 2000;
 
-	metaWriteIndex = 0;
 	int offset = 0;
 
     CLEAR(buf);
@@ -490,10 +570,10 @@ void SentinelCamera::deviceCaptureThread()
 		meta.timestamp_us = buf.timestamp.tv_sec * 1000000.0 + buf.timestamp.tv_usec;
 		meta.key_frame = isIDR(storage+offset, buf.bytesused);
 
-		std::cerr << meta.size << " " << meta.timestamp_us << std::endl;
+		// std::cerr << metaWriteIndex << " " << meta.size << " " << meta.timestamp_us << std::endl;
 
-		if ( meta.key_frame )
-			std::cerr << "Key frame: " << meta.timestamp_us << std::endl;
+		// if ( meta.key_frame )
+		// 	std::cerr << "Key frame: " << meta.timestamp_us << std::endl;
 
 		offset += buf.bytesused;
 
@@ -641,11 +721,16 @@ void SentinelCamera::start2()
 {
 	running = true;
 
+	metaWriteIndex = 0;
+	metaCheckIndex = 0;
+
 	device_thread = thread( &SentinelCamera::deviceCaptureThread, this );
-	// decoder_thread = thread( &SentinelCamera::decoderThread, this );
+	decoder_thread = thread( &SentinelCamera::decoderThread, this );
+	check_thread = thread( &SentinelCamera::checkThread2, this );
 
 	device_thread.join();
-	// decoder_thread.join();
+	decoder_thread.join();
+	check_thread.join();
 
 	running = false;
 }
@@ -1594,6 +1679,185 @@ void SentinelCamera::outputThread()
 	}
 
 	delete[] storage;
+}
+
+void SentinelCamera::checkThread2()
+{
+	abortCheckThread = false;
+	int checkIndex = 0;
+
+	double sumAverage = 0.0;
+	const int FRAMES_PER_HOUR = 60 * 60 * 30;
+
+	bool triggered = false;
+	bool untriggered = false;
+	int eventDuration = 0;
+	int frameCount = 0;
+	int triggerCount = 0;
+	int untriggerCount = 0;
+	int rateLimitBank = FRAMES_PER_HOUR; // One hour worth of frames
+	bool force = false;
+	int64_t frameTime = 0;
+	int frameOffset = 0;
+
+	string base;
+	string videoPath;
+	string textPath;
+	string tempPath;
+
+	std::ofstream videoFile;
+	std::ofstream textFile;
+
+	auto initiateTrigger = [&,this](){
+		triggered = true;
+		untriggered = false;
+		eventDuration = 0;
+		force = false;
+
+		std::cerr << "Initiate trigger at: " << dateTimeString(frameTime) << std::endl;
+
+		base = "new/s";
+		base = base + dateTimeString( frameTime );
+
+		videoPath = base + ".h264";
+		textPath =  base + ".txt";
+		tempPath =  base + ".tmp";
+
+		videoFile.open( videoPath, std::ios::binary );
+		if ( !videoFile.is_open() )
+			std::cerr << "Could not open: " << videoPath << std::endl;
+			
+		textFile.open( textPath );
+		if ( !textFile.is_open() )
+			std::cerr << "Could not open: " << textPath << std::endl;
+
+		// Find the key frame at least 30 frames earlier 
+		int writeIndex = (checkIndex + NUM_STORAGE_META - 30) % NUM_STORAGE_META;
+		frameOffset = -30;
+		while ( !storageMetas[writeIndex].key_frame )
+		{
+			writeIndex = (writeIndex + NUM_STORAGE_META - 1) % NUM_STORAGE_META;
+			++frameOffset;
+		}
+
+		while ( writeIndex != ((checkIndex+1) % NUM_STORAGE_META) )
+		{
+			const StorageMeta& sMeta = storageMetas[writeIndex];
+			videoFile.write( (char *)storage+sMeta.offset, sMeta.size );
+			writeIndex = (writeIndex+1) % NUM_STORAGE_META;
+
+			string dateTime = dateTimeString( sMeta.timestamp_us );
+			textFile << std::setw(4) << frameOffset++
+				     << " " << dateTime 
+					 << std::setw(7) << sMeta.size << std::endl;
+		}
+	};
+
+	auto continueTrigger = [&,this](){
+		const StorageMeta& sMeta = storageMetas[checkIndex];
+		videoFile.write( (char *)storage+sMeta.offset, sMeta.size );
+
+		string dateTime = dateTimeString( sMeta.timestamp_us );
+		textFile << std::setw(4) << frameOffset++
+				 << " " << dateTime 
+				 << std::setw(7) << sMeta.size << std::endl;
+
+	};
+
+	auto terminateTrigger = [&,this](){
+		triggered = false;
+		untriggered = false;
+
+		rateLimitBank = std::max(0,rateLimitBank-FRAMES_PER_HOUR/max_events_per_hour);
+
+		std::cerr << "Terminate trigger at:" << dateTimeString(frameTime) << std::endl;
+
+		// Close files
+		if ( videoFile.is_open() )
+		{
+			videoFile.close();
+			rename(videoPath.c_str(), tempPath.c_str() );
+		}
+		if ( textFile.is_open() )
+			textFile.close();
+	};
+
+	for (;;)
+	{
+		++frameCount;
+		rateLimitBank = std::min(rateLimitBank+1,FRAMES_PER_HOUR);
+
+		{
+			std::unique_lock<std::mutex> locker(check_mutex);
+			checkCondition.wait_for( locker, 200ms, [this,checkIndex]() {
+				return abortCheckThread || (metaCheckIndex != checkIndex);
+			});
+
+			if ( abortCheckThread )
+				break;
+
+			if ( metaCheckIndex == checkIndex )
+				continue;
+
+			if ( force_event )
+			{
+				force = true;
+				force_event = false;
+			}
+		}
+
+		int sum = storageMetas[checkIndex].signalAmplitude;
+		frameTime = storageMetas[checkIndex].timestamp_us;
+
+		if ( !triggered )
+		{
+			bool tooMany = max_events_per_hour * rateLimitBank / FRAMES_PER_HOUR == 0;
+
+			if ( force || frameCount == force_count )
+				initiateTrigger();
+			else if ( sum >= sumThreshold && !tooMany )
+			{
+				++triggerCount;
+				if ( triggerCount >= 2 )
+					initiateTrigger();
+			}
+			else
+				triggerCount = 0;
+		}
+		else if ( triggered && !untriggered )
+		{
+			++eventDuration;
+			continueTrigger();
+
+			if ( sum < sumThreshold )
+			{
+				++untriggerCount;
+				if ( untriggerCount >= 2 )
+					untriggered = true;
+			}
+			else
+			{
+				untriggerCount = 0;
+				if ( eventDuration > 300 )
+					terminateTrigger();
+			}
+		}
+		else
+		{
+			++eventDuration;
+			continueTrigger();
+
+			if ( sum < sumThreshold )
+				++untriggerCount;
+
+			if ( eventDuration > 60 && untriggerCount >= 15 )
+				terminateTrigger();
+			else if ( eventDuration > 300 )
+				terminateTrigger();
+		}
+
+		checkIndex = (checkIndex+1) % NUM_STORAGE_META;
+	}
 }
 
 void SentinelCamera::checkThread()
