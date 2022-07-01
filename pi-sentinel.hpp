@@ -102,6 +102,7 @@ private:
     bool abortDecoderThread;
     bool abortPoll;
     bool abortOutput;
+    bool abortArchiveThread;
 
 	// vector<std::unique_ptr<Request>> requests;
     thread request_thread;
@@ -111,6 +112,7 @@ private:
     thread event_thread;
     thread device_thread;
     thread decoder_thread;
+    thread archive_thread;
 
     mutex input_buffers_available_mutex;
     queue<int> input_buffers_available;
@@ -161,6 +163,7 @@ private:
     queue<int64_t> eventQueue;
 
     condition_variable decoder_cond_var;
+    condition_variable archive_cond_var;
 
     unsigned char* referenceFrame;
     unsigned char* maskFrame;
@@ -178,6 +181,7 @@ public:
     void checkThread();
     void checkThread2();
     void eventThread();
+    void archiveThread();
     void startDeviceCapture();
     void stopDeviceCapture();
     void deviceCaptureThread();
@@ -195,6 +199,7 @@ public:
     void encodeBuffer(int fd, size_t size, int64_t timestamp_us);
     void fillCheckBuffer( int fd, int64_t timestamp_us );
     void syncTime();
+    void processDecoded( string videoFilePath, ProcessType process );
     void runDecoder( string videoFilePath, ProcessType process );
     void stopDecoder();
     void encodeJPEG(void * mem, const string& fileName );

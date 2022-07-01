@@ -582,7 +582,9 @@ void SentinelCamera::deviceCaptureThread()
 		meta_write_mutex.lock();
 		metaWriteIndex = (metaWriteIndex + 1) % NUM_STORAGE_META;
 		meta_write_mutex.unlock();
+
 		decoder_cond_var.notify_one();
+		archive_cond_var.notify_one();
 
     	if (-1 == xioctl(device_fd, VIDIOC_QBUF, &buf))
 			throw std::runtime_error("Error with VIDIOC_QBUF");
@@ -709,14 +711,6 @@ void SentinelCamera::fillCheckBuffer( int fd, int64_t timestamp_us )
 	checkCondition.notify_one();
 }
 
-constexpr uint32_t my_fourcc(char a, char b, char c, char d)
-{
-	return (static_cast<uint32_t>(a) <<  0) |
-	       (static_cast<uint32_t>(b) <<  8) |
-	       (static_cast<uint32_t>(c) << 16) |
-	       (static_cast<uint32_t>(d) << 24);
-}
-
 void SentinelCamera::start2()
 {
 	running = true;
@@ -724,12 +718,14 @@ void SentinelCamera::start2()
 	metaWriteIndex = 0;
 	metaCheckIndex = 0;
 
-	device_thread = thread( &SentinelCamera::deviceCaptureThread, this );
+	device_thread  = thread( &SentinelCamera::deviceCaptureThread, this );
 	decoder_thread = thread( &SentinelCamera::decoderThread, this );
-	check_thread = thread( &SentinelCamera::checkThread2, this );
+	archive_thread = thread( &SentinelCamera::archiveThread, this );
+	check_thread   = thread( &SentinelCamera::checkThread2, this );
 
 	device_thread.join();
 	decoder_thread.join();
+	archive_thread.join();
 	check_thread.join();
 
 	running = false;
@@ -1070,6 +1066,63 @@ void SentinelCamera::readMask()
 	}
 
 	delete[] lpData;
+}
+
+void SentinelCamera::processDecoded( string videoFilePath, ProcessType process )
+{
+	std::ifstream videoFile;
+	videoFile.open( videoFilePath, std::ios::binary );
+	if ( !videoFile.is_open() )
+		return;
+
+	size_t index = videoFilePath.find(".h264");
+	if ( index == string::npos )
+		return;
+
+	string textFilePath = videoFilePath;
+
+	textFilePath.replace( index, 5, ".txt" );
+	std::ifstream textFile;
+	textFile.open( textFilePath );
+	if ( !textFile.is_open() )
+		return;
+
+	createDecoder();
+
+    auto const coded_buf_type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
+    auto const decoded_buf_type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+    auto const coded_buffers = map_decoder_buffers(coded_buf_type);
+    auto const decoded_buffers = map_decoder_buffers(decoded_buf_type);
+
+    std::vector<MappedBuffer*> coded_free, decoded_free;
+    for (auto const &b : coded_buffers) 
+		coded_free.push_back(b.get());
+    for (auto const &b : decoded_buffers) 
+		decoded_free.push_back(b.get());
+
+    v4l2_plane received_plane = {};
+    v4l2_buffer received = {};
+    received.memory = V4L2_MEMORY_MMAP;
+    received.length = 1;
+    received.m.planes = &received_plane;
+
+    v4l2_decoder_cmd command = {};
+    command.cmd = V4L2_DEC_CMD_START;
+    if (v4l2_ioctl(decoder_fd, VIDIOC_DECODER_CMD, &command)) 
+		throw std::runtime_error("error sending start");
+
+	for (;;)
+	{
+		
+	}
+
+	if ( videoFile.is_open() )
+		videoFile.close();
+
+	if ( textFile.is_open() )
+		textFile.close();
+
+	stopDecoder();
 }
 
 void SentinelCamera::runDecoder( string videoFilePath, ProcessType process ) 
@@ -1567,6 +1620,69 @@ string SentinelCamera::dateTimeString( int64_t timestamp_us )
 	         t.tm_hour,t.tm_min,t.tm_sec, microsecs/1000);
 
 	return buff;
+}
+
+void SentinelCamera::archiveThread()
+{
+	abortArchiveThread = false;
+
+	std::ofstream videoFile;
+	std::ofstream textFile;
+	string oldMinute = "20220101_0000";
+
+	int archiveIndex = 0;
+
+	for (;;)
+	{
+		{
+			std::unique_lock<std::mutex> locker(meta_write_mutex);
+			archive_cond_var.wait_for( locker, 200ms, [this,archiveIndex]() {
+				return abortArchiveThread || (metaWriteIndex != archiveIndex);
+			});
+
+			if ( abortArchiveThread )
+				break;
+
+			if ( metaWriteIndex == archiveIndex )
+				continue;
+		}
+
+		StorageMeta sMeta = storageMetas[archiveIndex];
+		string dateTime = dateTimeString( sMeta.timestamp_us);
+		string minuteString = dateTime.substr(0,13);
+
+		bool keyFrame = sMeta.key_frame;
+
+		if ( minuteString != oldMinute && keyFrame && !archivePath.empty() )
+		{
+			oldMinute = minuteString;
+			if ( videoFile.is_open() )
+				videoFile.close();
+			if ( textFile.is_open() )
+				textFile.close();
+
+			string hourString = minuteString.substr(0,11);
+			string folderPath = archivePath + ((archivePath.back() == '/') ? "s" : "/s") + hourString;
+			int e = mkdir( folderPath.c_str(), S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH );
+        	if ( e == -1 && errno != EEXIST )
+            	std::cerr << "Could not create archive folder: " << folderPath << std::endl;
+
+			string basePath = folderPath + "/s" + minuteString;
+			string videoPath = basePath + ".h264";
+			string textPath = basePath + ".txt";
+		
+			videoFile.open( videoPath, std::ios::binary );
+			textFile.open( textPath );
+		}
+
+		if ( videoFile.is_open() )
+			videoFile.write( (char *)storage+sMeta.offset, sMeta.size );
+
+		if ( textFile.is_open() )
+			textFile << dateTime << std::setw(7) << sMeta.size << std::endl;
+
+		archiveIndex = (archiveIndex+1) % NUM_STORAGE_META;
+	}
 }
 
 void SentinelCamera::outputThread()
