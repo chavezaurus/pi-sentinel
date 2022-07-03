@@ -16,7 +16,6 @@
 #include <jpeglib.h>
 #include <math.h>
 #include <list>
-#include <filesystem>
 
 #include "pi-sentinel.hpp"
 
@@ -95,27 +94,26 @@ static void Parse( const char* json, map<string,double>& doubleMap )
     }
 }
 
-vector<SentinelCamera*> SentinelCamera::cameraVector;
+// vector<SentinelCamera*> SentinelCamera::cameraVector;
 
 SentinelCamera::SentinelCamera()
 {
 	running = false;
-    id = cameraVector.size();
-    cameraVector.push_back( this );
+    // id = cameraVector.size();
+    // cameraVector.push_back( this );
 	max_frame_count = 0;
-	checkBufferHead = 0;
-	checkBufferTail = 0;
+	// checkBufferHead = 0;
+	// checkBufferTail = 0;
 	noise_level = 45;
 	moonx = 0;
 	moony = 0;
 	force_count = 0;
 	sumThreshold = 35;
 	max_events_per_hour = 5;
-	zenithAmplitude = 0.0;
+	averageZenithAmplitude = 0.0;
 	force_event = false;
 
 	syncTime();
-
 }
 
 SentinelCamera::~SentinelCamera()
@@ -365,6 +363,22 @@ int SentinelCamera::signalAmplitude( unsigned char* pstart )
 	return sum;
 }
 
+double SentinelCamera::zenithAmplitude( unsigned char* pstart )
+{
+	int zsum = 0;
+	unsigned char* p = pstart;
+
+    for ( int row = 510; row <= 570; row += 30)
+    {
+        for ( int col = 930; col <= 990; col += 30 )
+            zsum += p[1920*row + col];
+    }
+
+	double avg = zsum / 9.0;
+
+	return avg;
+}
+
 void SentinelCamera::decoderThread()
 {
 	createDecoder();
@@ -478,7 +492,11 @@ void SentinelCamera::decoderThread()
 
 			// auto start_timer = high_resolution_clock::now();
 			int sa = signalAmplitude( dptr );
-			auto stop_timer = high_resolution_clock::now();
+			zenith_mutex.lock();
+    		averageZenithAmplitude = zenithAmplitude( dptr );
+			zenith_mutex.unlock();
+
+			// auto stop_timer = high_resolution_clock::now();
 			// auto duration = duration_cast<microseconds>(stop_timer - start_timer);	
 			// std::cerr << "Duration: " << duration.count() << std::endl;
 
@@ -694,24 +712,24 @@ void SentinelCamera::syncTime()
 //     }
 // }
 
-void SentinelCamera::fillCheckBuffer( int fd, int64_t timestamp_us )
-{
-	if ( mappedBuffers.find( fd ) == mappedBuffers.end() )
-		mappedBuffers[ fd ] = mmap( NULL, CHECK_FRAME_SIZE, PROT_READ, MAP_SHARED, fd, 0 );
-	void* mem = mappedBuffers[ fd ];
+// void SentinelCamera::fillCheckBuffer( int fd, int64_t timestamp_us )
+// {
+// 	if ( mappedBuffers.find( fd ) == mappedBuffers.end() )
+// 		mappedBuffers[ fd ] = mmap( NULL, CHECK_FRAME_SIZE, PROT_READ, MAP_SHARED, fd, 0 );
+// 	void* mem = mappedBuffers[ fd ];
 
-	CheckBufferDescription& desc = checkBuffers[checkBufferHead];
-	memcpy( desc.mem, mem, CHECK_FRAME_SIZE );
-	desc.timestamp_us = timestamp_us;
+// 	CheckBufferDescription& desc = checkBuffers[checkBufferHead];
+// 	memcpy( desc.mem, mem, CHECK_FRAME_SIZE );
+// 	desc.timestamp_us = timestamp_us;
 
-	check_mutex.lock();
-	checkBufferHead = (checkBufferHead+1) % NUM_CHECK_BUFFERS;
-	check_mutex.unlock();
+// 	check_mutex.lock();
+// 	checkBufferHead = (checkBufferHead+1) % NUM_CHECK_BUFFERS;
+// 	check_mutex.unlock();
 
-	checkCondition.notify_one();
-}
+// 	checkCondition.notify_one();
+// }
 
-void SentinelCamera::start2()
+void SentinelCamera::start()
 {
 	running = true;
 
@@ -721,19 +739,7 @@ void SentinelCamera::start2()
 	device_thread  = thread( &SentinelCamera::deviceCaptureThread, this );
 	decoder_thread = thread( &SentinelCamera::decoderThread, this );
 	archive_thread = thread( &SentinelCamera::archiveThread, this );
-	check_thread   = thread( &SentinelCamera::checkThread2, this );
-
-	device_thread.join();
-	decoder_thread.join();
-	archive_thread.join();
-	check_thread.join();
-
-	running = false;
-}
-
-void SentinelCamera::start()
-{
-
+	check_thread   = thread( &SentinelCamera::checkThread, this );
 }
 
 // void SentinelCamera::start()
@@ -849,54 +855,18 @@ void SentinelCamera::start()
 
 void SentinelCamera::initiateShutdown()
 {
-	requestMutex.lock();
-    abortRequestThread = true;
-	requestMutex.unlock();
+	abortCheckThread = true;
+    abortEventThread = true;
+    abortDecoderThread = true;
+    abortArchiveThread = true;
 }
 
 void SentinelCamera::completeShutdown()
 {
-    request_thread.join();
-
-	input_buffers_available_mutex.lock();
-    abortPoll = true;
-	input_buffers_available_mutex.unlock();
-
-	output_mutex.lock();
-    abortOutput = true;
-    output_mutex.unlock();
-
-	check_mutex.lock();
-    abortCheckThread = true;
-    check_mutex.unlock();
-
-	event_mutex.lock();
-	abortEventThread = true;
-	event_mutex.unlock();
-
-    poll_thread.join();
-    output_thread.join();
+	device_thread.join();
+	decoder_thread.join();
+	archive_thread.join();
 	check_thread.join();
-	event_thread.join();
-
-    // camera->stop();
-
-	// close(encoder_fd);
-
-    // for ( StreamConfiguration &cfg : *config ) 
-    // {
-    //     allocator->free(cfg.stream());
-    // }
-
-	// delete allocator;
-	// camera->release();
-	// camera.reset();
-	// cm->stop();
-
-	for ( int i = 0; i < NUM_CHECK_BUFFERS; ++i )
-		delete[] checkBuffers[i].mem;
-
-	// delete cm;
 }
 
 void SentinelCamera::stop()
@@ -1070,6 +1040,8 @@ void SentinelCamera::readMask()
 
 void SentinelCamera::processDecoded( string videoFilePath, ProcessType process )
 {
+	pollfd fds[1];
+
 	std::ifstream videoFile;
 	videoFile.open( videoFilePath, std::ios::binary );
 	if ( !videoFile.is_open() )
@@ -1111,9 +1083,91 @@ void SentinelCamera::processDecoded( string videoFilePath, ProcessType process )
     if (v4l2_ioctl(decoder_fd, VIDIOC_DECODER_CMD, &command)) 
 		throw std::runtime_error("error sending start");
 
-	for (;;)
+	int timeout_msecs = 2000;
+	fds[0].fd = decoder_fd;
+	fds[0].events = POLLIN | POLLOUT;
+
+	bool more = true;
+	std::list<string> timeStrings;
+
+	while ( more )
 	{
-		
+		int ret = poll(fds,1,timeout_msecs);
+		if ( ret == -1 )
+			throw std::runtime_error("Poll error");
+
+		if ( ret == 0 )
+		{
+			std::cerr << "Poll timeout" << std::endl;
+			continue;
+		}
+
+        // Reclaim coded buffers once consumed by the decoder.
+        received.type = coded_buf_type;
+        while (!v4l2_ioctl(decoder_fd, VIDIOC_DQBUF, &received)) 
+		{
+            if (received.index > coded_buffers.size()) 
+				throw std::runtime_error( "bad reclaimed index");
+            coded_free.push_back(coded_buffers[received.index].get());
+			// std::cerr << "coded DQ " << coded_free.size() << std::endl;
+        }
+        if (errno != EAGAIN)
+			throw std::runtime_error( "error reclaiming coded buffer");
+
+		if ( !coded_free.empty() )
+		{
+			int frameCount = 0;
+			string timeValue;
+			int frameSize = 0;
+
+			auto* coded = coded_free.back();
+			coded_free.pop_back();
+
+			textFile >> frameCount >> timeValue >> frameSize;
+			if ( !textFile.fail() )
+			{
+				videoFile.read( (char *)coded->mmap, frameSize );
+				coded->plane.bytesused = frameSize;
+				timeStrings.push_back( timeValue );
+			}
+
+        	if (v4l2_ioctl(decoder_fd, VIDIOC_QBUF, &coded->buffer))
+				throw std::runtime_error("error sending coded buffer");
+		}
+
+        // Send empty decoded buffers to be filled by the decoder.
+        while (!decoded_free.empty()) 
+		{
+            auto* decoded = decoded_free.back();
+            decoded_free.pop_back();
+			// std::cerr << "decoded Q " <<  decoded_free.size() << std::endl;
+
+            if (v4l2_ioctl(decoder_fd, VIDIOC_QBUF, &decoded->buffer))
+				throw std::runtime_error( "error cycling buffer " );
+        }
+
+        // Receive decoded data and return the buffers.
+        received.type = decoded_buf_type;
+        while ( !v4l2_ioctl(decoder_fd, VIDIOC_DQBUF, &received)) 
+		{
+            if (received.index > decoded_buffers.size())
+				throw std::runtime_error( "bad decoded index");
+
+            auto* decoded = decoded_buffers[received.index].get();
+			string timeString = timeStrings.front();
+			timeStrings.pop_front();
+			more = more && process( decoded->mmap, timeString );
+
+            decoded_free.push_back(decoded);
+
+			if ( timeStrings.empty() )
+				more = false;
+
+			if ( !more )
+				break;
+        }
+        if (errno != EAGAIN)
+			throw std::runtime_error( "error receiving decoded buffers" );
 	}
 
 	if ( videoFile.is_open() )
@@ -1125,138 +1179,138 @@ void SentinelCamera::processDecoded( string videoFilePath, ProcessType process )
 	stopDecoder();
 }
 
-void SentinelCamera::runDecoder( string videoFilePath, ProcessType process ) 
-{
-	std::ifstream videoFile;
-	videoFile.open( videoFilePath.c_str(), std::ios::binary );
-	if ( !videoFile.is_open() )
-		return;
+// void SentinelCamera::runDecoder( string videoFilePath, ProcessType process ) 
+// {
+// 	std::ifstream videoFile;
+// 	videoFile.open( videoFilePath.c_str(), std::ios::binary );
+// 	if ( !videoFile.is_open() )
+// 		return;
 
-	size_t index = videoFilePath.find(".h264");
-	if ( index == string::npos )
-		return;
+// 	size_t index = videoFilePath.find(".h264");
+// 	if ( index == string::npos )
+// 		return;
 
-	string textFilePath = videoFilePath;
-	textFilePath.replace( index, 5, ".txt" );
+// 	string textFilePath = videoFilePath;
+// 	textFilePath.replace( index, 5, ".txt" );
 
-	// std::cerr << textFilePath << std::endl;
+// 	// std::cerr << textFilePath << std::endl;
 
-	std::ifstream textFile;
-	textFile.open( textFilePath.c_str() );
-	if ( !textFile.is_open() )
-		return;
+// 	std::ifstream textFile;
+// 	textFile.open( textFilePath.c_str() );
+// 	if ( !textFile.is_open() )
+// 		return;
 
-    auto const coded_buf_type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
-    auto const decoded_buf_type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-    auto const coded_buffers = map_decoder_buffers(coded_buf_type);
-    auto const decoded_buffers = map_decoder_buffers(decoded_buf_type);
+//     auto const coded_buf_type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
+//     auto const decoded_buf_type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+//     auto const coded_buffers = map_decoder_buffers(coded_buf_type);
+//     auto const decoded_buffers = map_decoder_buffers(decoded_buf_type);
 
-    std::vector<MappedBuffer*> coded_free, decoded_free;
-    for (auto const &b : coded_buffers) 
-		coded_free.push_back(b.get());
-    for (auto const &b : decoded_buffers) 
-		decoded_free.push_back(b.get());
+//     std::vector<MappedBuffer*> coded_free, decoded_free;
+//     for (auto const &b : coded_buffers) 
+// 		coded_free.push_back(b.get());
+//     for (auto const &b : decoded_buffers) 
+// 		decoded_free.push_back(b.get());
 
-    v4l2_plane received_plane = {};
-    v4l2_buffer received = {};
-    received.memory = V4L2_MEMORY_MMAP;
-    received.length = 1;
-    received.m.planes = &received_plane;
+//     v4l2_plane received_plane = {};
+//     v4l2_buffer received = {};
+//     received.memory = V4L2_MEMORY_MMAP;
+//     received.length = 1;
+//     received.m.planes = &received_plane;
 
-    bool drained = false;
+//     bool drained = false;
 
-	std::list<string> timeList;
+// 	std::list<string> timeList;
 
-    v4l2_decoder_cmd command = {};
-    command.cmd = V4L2_DEC_CMD_START;
-    if (v4l2_ioctl(decoder_fd, VIDIOC_DECODER_CMD, &command)) 
-		throw std::runtime_error("error sending start");
+//     v4l2_decoder_cmd command = {};
+//     command.cmd = V4L2_DEC_CMD_START;
+//     if (v4l2_ioctl(decoder_fd, VIDIOC_DECODER_CMD, &command)) 
+// 		throw std::runtime_error("error sending start");
 
-    while (!drained) 
-	{
-        // Reclaim coded buffers once consumed by the decoder.
-        received.type = coded_buf_type;
-        while (!v4l2_ioctl(decoder_fd, VIDIOC_DQBUF, &received)) 
-		{
-            if (received.index > coded_buffers.size()) 
-				throw std::runtime_error( "bad reclaimed indes");
-            coded_free.push_back(coded_buffers[received.index].get());
-        }
-        if (errno != EAGAIN)
-			throw std::runtime_error( "error reclaiming coded buffer");
+//     while (!drained) 
+// 	{
+//         // Reclaim coded buffers once consumed by the decoder.
+//         received.type = coded_buf_type;
+//         while (!v4l2_ioctl(decoder_fd, VIDIOC_DQBUF, &received)) 
+// 		{
+//             if (received.index > coded_buffers.size()) 
+// 				throw std::runtime_error( "bad reclaimed indes");
+//             coded_free.push_back(coded_buffers[received.index].get());
+//         }
+//         if (errno != EAGAIN)
+// 			throw std::runtime_error( "error reclaiming coded buffer");
 
-        // Push coded data into the decoder.
-        while (!coded_free.empty() && !textFile.eof() ) 
-		{
-            auto* coded = coded_free.back();
-            coded_free.pop_back();
-            coded->plane.bytesused = 0;
+//         // Push coded data into the decoder.
+//         while (!coded_free.empty() && !textFile.eof() ) 
+// 		{
+//             auto* coded = coded_free.back();
+//             coded_free.pop_back();
+//             coded->plane.bytesused = 0;
 
-			int frameCount = 0;
-			string timeValue;
-			int frameSize = 0;
+// 			int frameCount = 0;
+// 			string timeValue;
+// 			int frameSize = 0;
 
-			textFile >> frameCount >> timeValue >> frameSize;
+// 			textFile >> frameCount >> timeValue >> frameSize;
 			
-			if ( !textFile.fail() )
-			{
-				timeList.push_back( timeValue );
+// 			if ( !textFile.fail() )
+// 			{
+// 				timeList.push_back( timeValue );
 
-				// std::cerr << frameCount << " " << timeValue << " " << frameSize << std::endl;
+// 				// std::cerr << frameCount << " " << timeValue << " " << frameSize << std::endl;
 
-				videoFile.read( (char *)coded->mmap, frameSize );
-				coded->plane.bytesused = frameSize;
+// 				videoFile.read( (char *)coded->mmap, frameSize );
+// 				coded->plane.bytesused = frameSize;
 
-            	if (v4l2_ioctl(decoder_fd, VIDIOC_QBUF, &coded->buffer))
-					throw std::runtime_error("error sending coded buffer");
-			}
-			else
-			{
-                v4l2_decoder_cmd command = {};
-                command.cmd = V4L2_DEC_CMD_STOP;
-                if (v4l2_ioctl(decoder_fd, VIDIOC_DECODER_CMD, &command)) 
-					throw std::runtime_error("error sending STOP");
-            }
-        }
+//             	if (v4l2_ioctl(decoder_fd, VIDIOC_QBUF, &coded->buffer))
+// 					throw std::runtime_error("error sending coded buffer");
+// 			}
+// 			else
+// 			{
+//                 v4l2_decoder_cmd command = {};
+//                 command.cmd = V4L2_DEC_CMD_STOP;
+//                 if (v4l2_ioctl(decoder_fd, VIDIOC_DECODER_CMD, &command)) 
+// 					throw std::runtime_error("error sending STOP");
+//             }
+//         }
 
-        // Send empty decoded buffers to be filled by the decoder.
-        while (!decoded_free.empty()) 
-		{
-            auto* decoded = decoded_free.back();
-            decoded_free.pop_back();
+//         // Send empty decoded buffers to be filled by the decoder.
+//         while (!decoded_free.empty()) 
+// 		{
+//             auto* decoded = decoded_free.back();
+//             decoded_free.pop_back();
 
-            if (v4l2_ioctl(decoder_fd, VIDIOC_QBUF, &decoded->buffer))
-				throw std::runtime_error( "error cycling buffer " );
-        }
+//             if (v4l2_ioctl(decoder_fd, VIDIOC_QBUF, &decoded->buffer))
+// 				throw std::runtime_error( "error cycling buffer " );
+//         }
 
-        // Receive decoded data and return the buffers.
-        received.type = decoded_buf_type;
-        while (!drained && !v4l2_ioctl(decoder_fd, VIDIOC_DQBUF, &received)) 
-		{
-            if (received.index > decoded_buffers.size())
-				throw std::runtime_error( "bad decoded index");
+//         // Receive decoded data and return the buffers.
+//         received.type = decoded_buf_type;
+//         while (!drained && !v4l2_ioctl(decoder_fd, VIDIOC_DQBUF, &received)) 
+// 		{
+//             if (received.index > decoded_buffers.size())
+// 				throw std::runtime_error( "bad decoded index");
 
-            drained = (received.flags & V4L2_BUF_FLAG_LAST);
-            auto* decoded = decoded_buffers[received.index].get();
-            //
-			if ( !timeList.empty() )
-			{
-				string time = timeList.front();
-				timeList.pop_front();
-				bool more = process( decoded->mmap, time );
-				if ( !more )
-					drained = true;
-			}
+//             drained = (received.flags & V4L2_BUF_FLAG_LAST);
+//             auto* decoded = decoded_buffers[received.index].get();
+//             //
+// 			if ( !timeList.empty() )
+// 			{
+// 				string time = timeList.front();
+// 				timeList.pop_front();
+// 				bool more = process( decoded->mmap, time );
+// 				if ( !more )
+// 					drained = true;
+// 			}
 
-            decoded_free.push_back(decoded);
-        }
-        if (errno != EAGAIN)
-			throw std::runtime_error( "error receiving decoded buffers" );
+//             decoded_free.push_back(decoded);
+//         }
+//         if (errno != EAGAIN)
+// 			throw std::runtime_error( "error receiving decoded buffers" );
 
-        // Poll after a 3ms delay -- TODO use poll() instead
-        std::this_thread::sleep_for(std::chrono::milliseconds(3));
-    }
-}
+//         // Poll after a 3ms delay -- TODO use poll() instead
+//         std::this_thread::sleep_for(std::chrono::milliseconds(3));
+//     }
+// }
 
 void SentinelCamera::stopDecoder() 
 {
@@ -1482,121 +1536,121 @@ void SentinelCamera::createEncoder()
 	// std::cerr << "Codec streaming started" << std::endl;
 }
 
-void SentinelCamera::encodeBuffer(int fd, size_t size, int64_t timestamp_us)
-{
-	int index;
-	{
-		// We need to find an available output buffer (input to the codec) to
-		// "wrap" the DMABUF.
-		std::lock_guard<std::mutex> lock(input_buffers_available_mutex);
-		if (input_buffers_available.empty())
-			throw std::runtime_error("no buffers available to queue codec input");
-		index = input_buffers_available.front();
-		input_buffers_available.pop();
-	}
-	v4l2_buffer buf = {};
-	v4l2_plane planes[VIDEO_MAX_PLANES] = {};
-	buf.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
-	buf.index = index;
-	buf.field = V4L2_FIELD_NONE;
-	buf.memory = V4L2_MEMORY_DMABUF;
-	buf.length = 1;
-	buf.timestamp.tv_sec = timestamp_us / 1000000;
-	buf.timestamp.tv_usec = timestamp_us % 1000000;
-	buf.m.planes = planes;
-	buf.m.planes[0].m.fd = fd;
-	buf.m.planes[0].bytesused = size;
-	buf.m.planes[0].length = size;
-	if (xioctl(encoder_fd, VIDIOC_QBUF, &buf) < 0)
-		throw std::runtime_error("failed to queue input to codec");
-}
+// void SentinelCamera::encodeBuffer(int fd, size_t size, int64_t timestamp_us)
+// {
+// 	int index;
+// 	{
+// 		// We need to find an available output buffer (input to the codec) to
+// 		// "wrap" the DMABUF.
+// 		std::lock_guard<std::mutex> lock(input_buffers_available_mutex);
+// 		if (input_buffers_available.empty())
+// 			throw std::runtime_error("no buffers available to queue codec input");
+// 		index = input_buffers_available.front();
+// 		input_buffers_available.pop();
+// 	}
+// 	v4l2_buffer buf = {};
+// 	v4l2_plane planes[VIDEO_MAX_PLANES] = {};
+// 	buf.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
+// 	buf.index = index;
+// 	buf.field = V4L2_FIELD_NONE;
+// 	buf.memory = V4L2_MEMORY_DMABUF;
+// 	buf.length = 1;
+// 	buf.timestamp.tv_sec = timestamp_us / 1000000;
+// 	buf.timestamp.tv_usec = timestamp_us % 1000000;
+// 	buf.m.planes = planes;
+// 	buf.m.planes[0].m.fd = fd;
+// 	buf.m.planes[0].bytesused = size;
+// 	buf.m.planes[0].length = size;
+// 	if (xioctl(encoder_fd, VIDIOC_QBUF, &buf) < 0)
+// 		throw std::runtime_error("failed to queue input to codec");
+// }
 
-void SentinelCamera::pollThread()
-{
-    abortPoll = false;
+// void SentinelCamera::pollThread()
+// {
+//     abortPoll = false;
 
-	while (true)
-	{
-		pollfd p = { encoder_fd, POLLIN, 0 };
-		int ret = poll(&p, 1, 200);
-		{
-			std::lock_guard<std::mutex> lock(input_buffers_available_mutex);
-			if (abortPoll && input_buffers_available.size() == NUM_OUTPUT_BUFFERS)
-				break;
-		}
-		if (ret == -1)
-		{
-			if (errno == EINTR)
-				continue;
-			throw std::runtime_error("unexpected errno " + std::to_string(errno) + " from poll");
-		}
-		if (p.revents & POLLIN)
-		{
-			v4l2_buffer buf = {};
-			v4l2_plane planes[VIDEO_MAX_PLANES] = {};
-			buf.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
-			buf.memory = V4L2_MEMORY_DMABUF;
-			buf.length = 1;
-			buf.m.planes = planes;
-			int ret = xioctl(encoder_fd, VIDIOC_DQBUF, &buf);
-			if (ret == 0)
-			{
-				// Return this to the caller, first noting that this buffer, identified
-				// by its index, is available for queueing up another frame.
-				{
-					std::lock_guard<std::mutex> lock(input_buffers_available_mutex);
-					input_buffers_available.push(buf.index);
-				}
-				// input_done_callback_(nullptr);
-			}
+// 	while (true)
+// 	{
+// 		pollfd p = { encoder_fd, POLLIN, 0 };
+// 		int ret = poll(&p, 1, 200);
+// 		{
+// 			std::lock_guard<std::mutex> lock(input_buffers_available_mutex);
+// 			if (abortPoll && input_buffers_available.size() == NUM_OUTPUT_BUFFERS)
+// 				break;
+// 		}
+// 		if (ret == -1)
+// 		{
+// 			if (errno == EINTR)
+// 				continue;
+// 			throw std::runtime_error("unexpected errno " + std::to_string(errno) + " from poll");
+// 		}
+// 		if (p.revents & POLLIN)
+// 		{
+// 			v4l2_buffer buf = {};
+// 			v4l2_plane planes[VIDEO_MAX_PLANES] = {};
+// 			buf.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
+// 			buf.memory = V4L2_MEMORY_DMABUF;
+// 			buf.length = 1;
+// 			buf.m.planes = planes;
+// 			int ret = xioctl(encoder_fd, VIDIOC_DQBUF, &buf);
+// 			if (ret == 0)
+// 			{
+// 				// Return this to the caller, first noting that this buffer, identified
+// 				// by its index, is available for queueing up another frame.
+// 				{
+// 					std::lock_guard<std::mutex> lock(input_buffers_available_mutex);
+// 					input_buffers_available.push(buf.index);
+// 				}
+// 				// input_done_callback_(nullptr);
+// 			}
 
-			buf = {};
-			memset(planes, 0, sizeof(planes));
-			buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-			buf.memory = V4L2_MEMORY_MMAP;
-			buf.length = 1;
-			buf.m.planes = planes;
-			ret = xioctl(encoder_fd, VIDIOC_DQBUF, &buf);
-			if (ret == 0)
-			{
-				// We push this encoded buffer to another thread so that our
-				// application can take its time with the data without blocking the
-				// encode process.
-				int64_t timestamp_us = (buf.timestamp.tv_sec * (int64_t)1000000) + buf.timestamp.tv_usec;
-				OutputItem item = { buffers[buf.index].mem,
-									buf.m.planes[0].bytesused,
-									buf.m.planes[0].length,
-									buf.index,
-									!!(buf.flags & V4L2_BUF_FLAG_KEYFRAME),
-									timestamp_us };
-				std::lock_guard<std::mutex> lock(output_mutex);
-				output_queue.push(item);
-				output_cond_var.notify_one();
-			}
-		}
-	}
-}
+// 			buf = {};
+// 			memset(planes, 0, sizeof(planes));
+// 			buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+// 			buf.memory = V4L2_MEMORY_MMAP;
+// 			buf.length = 1;
+// 			buf.m.planes = planes;
+// 			ret = xioctl(encoder_fd, VIDIOC_DQBUF, &buf);
+// 			if (ret == 0)
+// 			{
+// 				// We push this encoded buffer to another thread so that our
+// 				// application can take its time with the data without blocking the
+// 				// encode process.
+// 				int64_t timestamp_us = (buf.timestamp.tv_sec * (int64_t)1000000) + buf.timestamp.tv_usec;
+// 				OutputItem item = { buffers[buf.index].mem,
+// 									buf.m.planes[0].bytesused,
+// 									buf.m.planes[0].length,
+// 									buf.index,
+// 									!!(buf.flags & V4L2_BUF_FLAG_KEYFRAME),
+// 									timestamp_us };
+// 				std::lock_guard<std::mutex> lock(output_mutex);
+// 				output_queue.push(item);
+// 				output_cond_var.notify_one();
+// 			}
+// 		}
+// 	}
+// }
 
-string SentinelCamera::secondsString( int64_t timestamp_us )
-{
-	char buff[20];
+// string SentinelCamera::secondsString( int64_t timestamp_us )
+// {
+// 	char buff[20];
 
-	time_offset_mutex.lock();
-	timespec ts = time_offset;
-	time_offset_mutex.unlock();
+// 	time_offset_mutex.lock();
+// 	timespec ts = time_offset;
+// 	time_offset_mutex.unlock();
 
-	long seconds = ts.tv_sec + timestamp_us / 1000000;
-	int microsecs = ts.tv_nsec / 1000 + timestamp_us % 1000000;
+// 	long seconds = ts.tv_sec + timestamp_us / 1000000;
+// 	int microsecs = ts.tv_nsec / 1000 + timestamp_us % 1000000;
 
-	if ( microsecs >= 1000000 )
-	{
-		microsecs -= 1000000;
-		seconds += 1;
-	}
+// 	if ( microsecs >= 1000000 )
+// 	{
+// 		microsecs -= 1000000;
+// 		seconds += 1;
+// 	}
 
-	sprintf( buff, "%ld.%06d", seconds, microsecs );
-	return buff;
-}
+// 	sprintf( buff, "%ld.%06d", seconds, microsecs );
+// 	return buff;
+// }
 
 string SentinelCamera::dateTimeString( int64_t timestamp_us )
 {
@@ -1685,124 +1739,123 @@ void SentinelCamera::archiveThread()
 	}
 }
 
-void SentinelCamera::outputThread()
-{
-    abortOutput = false;
+// void SentinelCamera::outputThread()
+// {
+//     abortOutput = false;
 
-	bool keyfound = false;
-	std::ofstream videoFile;
-	std::ofstream textFile;
-	string oldMinute = "20220101_0000";
+// 	bool keyfound = false;
+// 	std::ofstream videoFile;
+// 	std::ofstream textFile;
+// 	string oldMinute = "20220101_0000";
 
-	storage = new unsigned char[STORAGE_SIZE];
-	unsigned int offset = 0;
+// 	storage = new unsigned char[STORAGE_SIZE];
+// 	unsigned int offset = 0;
 
-	OutputItem item;
-	while (true)
-	{
-		{
-			std::unique_lock<std::mutex> locker(output_mutex);
-			output_cond_var.wait_for( locker, 200ms, [this]() {
-				return abortOutput || !output_queue.empty();
-			});
+// 	OutputItem item;
+// 	while (true)
+// 	{
+// 		{
+// 			std::unique_lock<std::mutex> locker(output_mutex);
+// 			output_cond_var.wait_for( locker, 200ms, [this]() {
+// 				return abortOutput || !output_queue.empty();
+// 			});
 
-			if ( abortOutput && output_queue.empty() )
-				break;
+// 			if ( abortOutput && output_queue.empty() )
+// 				break;
 
-			if ( output_queue.empty() )
-				continue;
+// 			if ( output_queue.empty() )
+// 				continue;
 
-			item = output_queue.front();
-			output_queue.pop();
-		}
+// 			item = output_queue.front();
+// 			output_queue.pop();
+// 		}
 
-		unsigned int remainder = STORAGE_SIZE - offset;
-		if ( remainder >= item.bytes_used )
-		{
-			memcpy( storage+offset, item.mem, item.bytes_used );
-		}
-		else
-		{
-			memcpy( storage+offset, item.mem, remainder );
-			memcpy( storage, (unsigned char*)item.mem+remainder, item.bytes_used-remainder );
-		}
+// 		unsigned int remainder = STORAGE_SIZE - offset;
+// 		if ( remainder >= item.bytes_used )
+// 		{
+// 			memcpy( storage+offset, item.mem, item.bytes_used );
+// 		}
+// 		else
+// 		{
+// 			memcpy( storage+offset, item.mem, remainder );
+// 			memcpy( storage, (unsigned char*)item.mem+remainder, item.bytes_used-remainder );
+// 		}
 
-		StorageDescription sd;
-		sd.offset = offset;
-		sd.size = item.bytes_used;
-		sd.key_frame = item.keyframe;
+// 		StorageDescription sd;
+// 		sd.offset = offset;
+// 		sd.size = item.bytes_used;
+// 		sd.key_frame = item.keyframe;
 
-		storage_mutex.lock();
-		storageMap[item.timestamp_us] = sd;
-		if ( storageMap.size() > 150 )
-			storageMap.erase( storageMap.begin() );
-		storage_mutex.unlock();
+// 		storage_mutex.lock();
+// 		storageMap[item.timestamp_us] = sd;
+// 		if ( storageMap.size() > 150 )
+// 			storageMap.erase( storageMap.begin() );
+// 		storage_mutex.unlock();
 
-		offset = (offset + item.bytes_used) % STORAGE_SIZE;
+// 		offset = (offset + item.bytes_used) % STORAGE_SIZE;
 
-		keyfound = keyfound || item.keyframe != 0;
-		string dateTime = dateTimeString(item.timestamp_us);
-		string minuteString = dateTime.substr(0,13);
+// 		keyfound = keyfound || item.keyframe != 0;
+// 		string dateTime = dateTimeString(item.timestamp_us);
+// 		string minuteString = dateTime.substr(0,13);
 
-		if ( minuteString != oldMinute && item.keyframe != 0 && !archivePath.empty() )
-		{
-			oldMinute = minuteString;
-			if ( videoFile.is_open() )
-				videoFile.close();
-			if ( textFile.is_open() )
-				textFile.close();
+// 		if ( minuteString != oldMinute && item.keyframe != 0 && !archivePath.empty() )
+// 		{
+// 			oldMinute = minuteString;
+// 			if ( videoFile.is_open() )
+// 				videoFile.close();
+// 			if ( textFile.is_open() )
+// 				textFile.close();
 
-			string hourString = minuteString.substr(0,11);
+// 			string hourString = minuteString.substr(0,11);
 
-			std::filesystem::path folderPath = archivePath;
-			folderPath.append("s");
-			folderPath.concat( hourString );
-			int e = mkdir( folderPath.c_str(), S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH );
-        	if ( e == -1 && errno != EEXIST )
-            	std::cerr << "Could not create archive folder: " << folderPath << std::endl;
+// 			std::filesystem::path folderPath = archivePath;
+// 			folderPath.append("s");
+// 			folderPath.concat( hourString );
+// 			int e = mkdir( folderPath.c_str(), S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH );
+//         	if ( e == -1 && errno != EEXIST )
+//             	std::cerr << "Could not create archive folder: " << folderPath << std::endl;
 
-			std::filesystem::path videoPath = folderPath;
-			videoPath.append("s");
-			videoPath.concat( minuteString );
-			videoPath.concat( ".h264" );
+// 			std::filesystem::path videoPath = folderPath;
+// 			videoPath.append("s");
+// 			videoPath.concat( minuteString );
+// 			videoPath.concat( ".h264" );
 
-			std::cerr << videoPath << std::endl;
+// 			std::cerr << videoPath << std::endl;
 
-			std::filesystem::path textPath = videoPath;
-			textPath.replace_extension(".txt");
+// 			std::filesystem::path textPath = videoPath;
+// 			textPath.replace_extension(".txt");
 
-			videoFile.open( videoPath, std::ios::binary );
-			textFile.open( textPath );
-		}
+// 			videoFile.open( videoPath, std::ios::binary );
+// 			textFile.open( textPath );
+// 		}
 
-		if ( videoFile.is_open() )
-			videoFile.write( (char *)item.mem, item.bytes_used );
+// 		if ( videoFile.is_open() )
+// 			videoFile.write( (char *)item.mem, item.bytes_used );
 
-		if ( textFile.is_open() )
-			textFile << dateTime << std::setw(7) << item.bytes_used << std::endl;
+// 		if ( textFile.is_open() )
+// 			textFile << dateTime << std::setw(7) << item.bytes_used << std::endl;
 
-		v4l2_buffer buf = {};
-		v4l2_plane planes[VIDEO_MAX_PLANES] = {};
-		buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-		buf.memory = V4L2_MEMORY_MMAP;
-		buf.index = item.index;
-		buf.length = 1;
-		buf.m.planes = planes;
-		buf.m.planes[0].bytesused = 0;
-		buf.m.planes[0].length = item.length;
-		if (xioctl(encoder_fd, VIDIOC_QBUF, &buf) < 0)
-			throw std::runtime_error("failed to re-queue encoded buffer");
-	}
+// 		v4l2_buffer buf = {};
+// 		v4l2_plane planes[VIDEO_MAX_PLANES] = {};
+// 		buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+// 		buf.memory = V4L2_MEMORY_MMAP;
+// 		buf.index = item.index;
+// 		buf.length = 1;
+// 		buf.m.planes = planes;
+// 		buf.m.planes[0].bytesused = 0;
+// 		buf.m.planes[0].length = item.length;
+// 		if (xioctl(encoder_fd, VIDIOC_QBUF, &buf) < 0)
+// 			throw std::runtime_error("failed to re-queue encoded buffer");
+// 	}
 
-	delete[] storage;
-}
+// 	delete[] storage;
+// }
 
-void SentinelCamera::checkThread2()
+void SentinelCamera::checkThread()
 {
 	abortCheckThread = false;
 	int checkIndex = 0;
 
-	double sumAverage = 0.0;
 	const int FRAMES_PER_HOUR = 60 * 60 * 30;
 
 	bool triggered = false;
@@ -1904,7 +1957,7 @@ void SentinelCamera::checkThread2()
 		rateLimitBank = std::min(rateLimitBank+1,FRAMES_PER_HOUR);
 
 		{
-			std::unique_lock<std::mutex> locker(check_mutex);
+			std::unique_lock<std::mutex> locker(meta_check_mutex);
 			checkCondition.wait_for( locker, 200ms, [this,checkIndex]() {
 				return abortCheckThread || (metaCheckIndex != checkIndex);
 			});
@@ -1968,322 +2021,329 @@ void SentinelCamera::checkThread2()
 
 			if ( eventDuration > 60 && untriggerCount >= 15 )
 				terminateTrigger();
-			else if ( eventDuration > 300 )
+			else if ( eventDuration > 600 )
 				terminateTrigger();
 		}
 
 		checkIndex = (checkIndex+1) % NUM_STORAGE_META;
+
+		if ( (max_frame_count != 0) && (frameCount == max_frame_count) )
+			initiateShutdown();
+
+		// Sync time every 60 frames
+		if ( (frameCount % 60) == 0 )
+			syncTime(); 
 	}
 }
 
-void SentinelCamera::checkThread()
-{
-	abortCheckThread = false;
-	int previous = 0;
+// void SentinelCamera::checkThread()
+// {
+// 	abortCheckThread = false;
+// 	int previous = 0;
 
-	double sumAverage = 0.0;
+// 	double sumAverage = 0.0;
 
-	referenceFrame = new unsigned char[CHECK_FRAME_SIZE];
-	maskFrame      = new unsigned char[CHECK_FRAME_SIZE];
+// 	referenceFrame = new unsigned char[CHECK_FRAME_SIZE];
+// 	maskFrame      = new unsigned char[CHECK_FRAME_SIZE];
 
-	memset(referenceFrame, 0xff, CHECK_FRAME_SIZE);
-	memset(maskFrame, noise_level, CHECK_FRAME_SIZE);
+// 	memset(referenceFrame, 0xff, CHECK_FRAME_SIZE);
+// 	memset(maskFrame, noise_level, CHECK_FRAME_SIZE);
 
-	int64_t frameTime = 0;
+// 	int64_t frameTime = 0;
 
-	const int FRAMES_PER_HOUR = 60 * 60 * 30;
+// 	const int FRAMES_PER_HOUR = 60 * 60 * 30;
 
-	bool triggered = false;
-	bool untriggered = false;
-	int eventDuration = 0;
-	int frameCount = 0;
-	int triggerCount = 0;
-	int untriggerCount = 0;
-	int rateLimitBank = FRAMES_PER_HOUR; // One hour worth of frames
-	bool force = false;
+// 	bool triggered = false;
+// 	bool untriggered = false;
+// 	int eventDuration = 0;
+// 	int frameCount = 0;
+// 	int triggerCount = 0;
+// 	int untriggerCount = 0;
+// 	int rateLimitBank = FRAMES_PER_HOUR; // One hour worth of frames
+// 	bool force = false;
 
-	auto initiateTrigger = [&](){
-		triggered = true;
-		untriggered = false;
-		eventDuration = 0;
-		force = false;
+// 	auto initiateTrigger = [&](){
+// 		triggered = true;
+// 		untriggered = false;
+// 		eventDuration = 0;
+// 		force = false;
 
-		event_mutex.lock();
-		eventQueue.push( frameTime );
-		event_mutex.unlock();
+// 		event_mutex.lock();
+// 		eventQueue.push( frameTime );
+// 		event_mutex.unlock();
 
-		std::cerr << "Initiate trigger at: " << dateTimeString(frameTime) << std::endl;
-	};
+// 		std::cerr << "Initiate trigger at: " << dateTimeString(frameTime) << std::endl;
+// 	};
 
-	auto terminateTrigger = [&,this](){
-		triggered = false;
-		untriggered = false;
+// 	auto terminateTrigger = [&,this](){
+// 		triggered = false;
+// 		untriggered = false;
 
-		event_mutex.lock();
-		eventQueue.push( frameTime );
-		event_mutex.unlock();
+// 		event_mutex.lock();
+// 		eventQueue.push( frameTime );
+// 		event_mutex.unlock();
 
-		// Temporarily de-sensitize
-		memset(referenceFrame, 0xff, CHECK_FRAME_SIZE);
+// 		// Temporarily de-sensitize
+// 		memset(referenceFrame, 0xff, CHECK_FRAME_SIZE);
 
-		rateLimitBank = std::max(0,rateLimitBank-FRAMES_PER_HOUR/max_events_per_hour);
+// 		rateLimitBank = std::max(0,rateLimitBank-FRAMES_PER_HOUR/max_events_per_hour);
 
-		std::cerr << "Terminate trigger at:" << dateTimeString(frameTime) << std::endl;
-	};
+// 		std::cerr << "Terminate trigger at:" << dateTimeString(frameTime) << std::endl;
+// 	};
 
-	readMask();
+// 	readMask();
 
-	for (;;)
-	{
-		++frameCount;
-		rateLimitBank = std::min(rateLimitBank+1,FRAMES_PER_HOUR);
+// 	for (;;)
+// 	{
+// 		++frameCount;
+// 		rateLimitBank = std::min(rateLimitBank+1,FRAMES_PER_HOUR);
 
-		{
-			std::unique_lock<std::mutex> locker(check_mutex);
-			checkCondition.wait_for( locker, 200ms, [this]() {
-				return (checkBufferHead != checkBufferTail) || abortCheckThread;
-			});
+// 		{
+// 			std::unique_lock<std::mutex> locker(check_mutex);
+// 			checkCondition.wait_for( locker, 200ms, [this]() {
+// 				return (checkBufferHead != checkBufferTail) || abortCheckThread;
+// 			});
 
-			if ( abortCheckThread )
-				break;
+// 			if ( abortCheckThread )
+// 				break;
 
-			if ( checkBufferHead == checkBufferTail )
-				continue;
+// 			if ( checkBufferHead == checkBufferTail )
+// 				continue;
 
-			previous = checkBufferTail;
-			checkBufferTail = (checkBufferTail+1) % NUM_CHECK_BUFFERS;
+// 			previous = checkBufferTail;
+// 			checkBufferTail = (checkBufferTail+1) % NUM_CHECK_BUFFERS;
 
-			if ( force_event )
-			{
-				force = true;
-				force_event = false;
-			}
-		}
+// 			if ( force_event )
+// 			{
+// 				force = true;
+// 				force_event = false;
+// 			}
+// 		}
 
-		CheckBufferDescription& desc = checkBuffers[previous];
-		frameTime = desc.timestamp_us;
-		unsigned char* p = desc.mem;
-		unsigned char* pend = p + CHECK_FRAME_SIZE;
+// 		CheckBufferDescription& desc = checkBuffers[previous];
+// 		frameTime = desc.timestamp_us;
+// 		unsigned char* p = desc.mem;
+// 		unsigned char* pend = p + CHECK_FRAME_SIZE;
 
-		unsigned char* pRef = referenceFrame;
-		unsigned char* pMask = maskFrame;
+// 		unsigned char* pRef = referenceFrame;
+// 		unsigned char* pMask = maskFrame;
 
-		int sum = 0;
+// 		int sum = 0;
 
-		while ( p < pend )
-		{
-			int c = *p++;
+// 		while ( p < pend )
+// 		{
+// 			int c = *p++;
 
-			int test = c - *pRef - *pMask++;
-			if ( test > 0 )
-				sum += test;
+// 			int test = c - *pRef - *pMask++;
+// 			if ( test > 0 )
+// 				sum += test;
 
-			c *= 15;
-			c += test;
-			c >>= 4;
+// 			c *= 15;
+// 			c += test;
+// 			c >>= 4;
 
-			*pRef++ = c;			
-		}
+// 			*pRef++ = c;			
+// 		}
 
-		//
-		// Measure the filtered average amplitude of an arbitrary collection of pixels near the zenith.
-		// This is used to determine if we are looking at a daylight sky where auto-exposure may be the preferred mode.
-		//
-	    int zsum = 0;
-		p = desc.mem;
+// 		//
+// 		// Measure the filtered average amplitude of an arbitrary collection of pixels near the zenith.
+// 		// This is used to determine if we are looking at a daylight sky where auto-exposure may be the preferred mode.
+// 		//
+// 	    int zsum = 0;
+// 		p = desc.mem;
 
-    	for ( int row = 170; row <= 190; row += 10)
-    	{
-        	for ( int col = 310; col <= 330; col += 10 )
-            	zsum += p[640*row + col];
-    	}
+//     	for ( int row = 170; row <= 190; row += 10)
+//     	{
+//         	for ( int col = 310; col <= 330; col += 10 )
+//             	zsum += p[640*row + col];
+//     	}
 
-    	double average = zsum / 9.0;
+//     	double average = zsum / 9.0;
 
-		zenith_mutex.lock();
-    	zenithAmplitude = 0.99 * zenithAmplitude + 0.01 * average;
-		zenith_mutex.unlock();
+// 		zenith_mutex.lock();
+//     	zenithAmplitude = 0.99 * zenithAmplitude + 0.01 * average;
+// 		zenith_mutex.unlock();
 
-		sumAverage = 0.99*sumAverage + 0.01*sum;
-		if ( (frameCount % 150) == 0 )
-			std::cerr << sumAverage << " " << zenithAmplitude << std::endl << std::flush;
+// 		sumAverage = 0.99*sumAverage + 0.01*sum;
+// 		if ( (frameCount % 150) == 0 )
+// 			std::cerr << sumAverage << " " << zenithAmplitude << std::endl << std::flush;
 
-		if ( !triggered )
-		{
-			bool tooMany = max_events_per_hour * rateLimitBank / FRAMES_PER_HOUR == 0;
+// 		if ( !triggered )
+// 		{
+// 			bool tooMany = max_events_per_hour * rateLimitBank / FRAMES_PER_HOUR == 0;
 
-			if ( force || frameCount == force_count )
-				initiateTrigger();
-			else if ( sum >= sumThreshold && !tooMany )
-			{
-				++triggerCount;
-				if ( triggerCount >= 2 )
-					initiateTrigger();
-			}
-			else
-				triggerCount = 0;
-		}
-		else if ( triggered && !untriggered )
-		{
-			++eventDuration;
+// 			if ( force || frameCount == force_count )
+// 				initiateTrigger();
+// 			else if ( sum >= sumThreshold && !tooMany )
+// 			{
+// 				++triggerCount;
+// 				if ( triggerCount >= 2 )
+// 					initiateTrigger();
+// 			}
+// 			else
+// 				triggerCount = 0;
+// 		}
+// 		else if ( triggered && !untriggered )
+// 		{
+// 			++eventDuration;
 
-			if ( sum < sumThreshold )
-			{
-				++untriggerCount;
-				if ( untriggerCount >= 2 )
-					untriggered = true;
-			}
-			else
-			{
-				untriggerCount = 0;
-				if ( eventDuration > 300 )
-					terminateTrigger();
-			}
-		}
-		else
-		{
-			++eventDuration;
+// 			if ( sum < sumThreshold )
+// 			{
+// 				++untriggerCount;
+// 				if ( untriggerCount >= 2 )
+// 					untriggered = true;
+// 			}
+// 			else
+// 			{
+// 				untriggerCount = 0;
+// 				if ( eventDuration > 300 )
+// 					terminateTrigger();
+// 			}
+// 		}
+// 		else
+// 		{
+// 			++eventDuration;
 
-			if ( sum < sumThreshold )
-				++untriggerCount;
+// 			if ( sum < sumThreshold )
+// 				++untriggerCount;
 
-			if ( eventDuration > 60 && untriggerCount >= 15 )
-				terminateTrigger();
-			else if ( eventDuration > 300 )
-				terminateTrigger();
-		}
+// 			if ( eventDuration > 60 && untriggerCount >= 15 )
+// 				terminateTrigger();
+// 			else if ( eventDuration > 300 )
+// 				terminateTrigger();
+// 		}
 
-		eventCondition.notify_one();
-	}
+// 		eventCondition.notify_one();
+// 	}
 
-	delete[] referenceFrame;
-	delete[] maskFrame;
-}
+// 	delete[] referenceFrame;
+// 	delete[] maskFrame;
+// }
 
-void SentinelCamera::eventThread()
-{
-	abortEventThread = false;
-	int64_t scan_time = 0;
-	int64_t end_time = 0;
-	bool keyframe_found = false;
+// void SentinelCamera::eventThread()
+// {
+// 	abortEventThread = false;
+// 	int64_t scan_time = 0;
+// 	int64_t end_time = 0;
+// 	bool keyframe_found = false;
 
-	std::filesystem::path videoPath;
-	std::filesystem::path textPath;
-	std::filesystem::path tempPath;
+// 	std::filesystem::path videoPath;
+// 	std::filesystem::path textPath;
+// 	std::filesystem::path tempPath;
 
-	std::ofstream videoFile;
-	std::ofstream textFile;
+// 	std::ofstream videoFile;
+// 	std::ofstream textFile;
 
-	int frame_count = 0;
+// 	int frame_count = 0;
 
-	for (;;)
-	{
-		int64_t tempTime = 0;
+// 	for (;;)
+// 	{
+// 		int64_t tempTime = 0;
 
-		{
-			std::unique_lock<std::mutex> locker(event_mutex);
-			eventCondition.wait_for( locker, 100ms );
+// 		{
+// 			std::unique_lock<std::mutex> locker(event_mutex);
+// 			eventCondition.wait_for( locker, 100ms );
 
-			if ( abortEventThread )
-				break;
+// 			if ( abortEventThread )
+// 				break;
 
-			if ( end_time == 0 && !eventQueue.empty() )
-			{
-				tempTime = eventQueue.front();
-				eventQueue.pop();
-			}
-		}
+// 			if ( end_time == 0 && !eventQueue.empty() )
+// 			{
+// 				tempTime = eventQueue.front();
+// 				eventQueue.pop();
+// 			}
+// 		}
 
-		if ( scan_time == 0 && tempTime == 0 )
-			continue;
+// 		if ( scan_time == 0 && tempTime == 0 )
+// 			continue;
 
-		if ( scan_time == 0 && tempTime != 0 )
-		{
-			// Open file
-			string timeString = dateTimeString( tempTime );
-			videoPath = "new/s";
-			videoPath.concat( timeString );
-			videoPath.concat( ".h264" );
-			textPath = videoPath;
-			textPath.replace_extension( ".txt" );
-			tempPath = videoPath;
-			tempPath.replace_extension( ".tmp");
+// 		if ( scan_time == 0 && tempTime != 0 )
+// 		{
+// 			// Open file
+// 			string timeString = dateTimeString( tempTime );
+// 			videoPath = "new/s";
+// 			videoPath.concat( timeString );
+// 			videoPath.concat( ".h264" );
+// 			textPath = videoPath;
+// 			textPath.replace_extension( ".txt" );
+// 			tempPath = videoPath;
+// 			tempPath.replace_extension( ".tmp");
 
-			videoFile.open( videoPath, std::ios::binary );
-			if ( !videoFile.is_open() )
-				std::cerr << "Could not open: " << videoPath << std::endl;
+// 			videoFile.open( videoPath, std::ios::binary );
+// 			if ( !videoFile.is_open() )
+// 				std::cerr << "Could not open: " << videoPath << std::endl;
 			
-			textFile.open( textPath );
-			if ( !textFile.is_open() )
-				std::cerr << "Could not open: " << textPath << std::endl;
+// 			textFile.open( textPath );
+// 			if ( !textFile.is_open() )
+// 				std::cerr << "Could not open: " << textPath << std::endl;
 
-			scan_time = tempTime - 2000000;
-			frame_count = 0;
-		}
-		else if ( scan_time != 0 && tempTime != 0 )
-			end_time = tempTime;
+// 			scan_time = tempTime - 2000000;
+// 			frame_count = 0;
+// 		}
+// 		else if ( scan_time != 0 && tempTime != 0 )
+// 			end_time = tempTime;
 
-		if ( scan_time != 0 && end_time != 0 && scan_time > end_time )
-		{
-			// Close files
-			if ( videoFile.is_open() )
-			{
-				videoFile.close();
-				rename(videoPath.c_str(), tempPath.c_str() );
-			}
-			if ( textFile.is_open() )
-				textFile.close();
-			scan_time = 0;
-			end_time = 0;
-			keyframe_found = false;
-		}
+// 		if ( scan_time != 0 && end_time != 0 && scan_time > end_time )
+// 		{
+// 			// Close files
+// 			if ( videoFile.is_open() )
+// 			{
+// 				videoFile.close();
+// 				rename(videoPath.c_str(), tempPath.c_str() );
+// 			}
+// 			if ( textFile.is_open() )
+// 				textFile.close();
+// 			scan_time = 0;
+// 			end_time = 0;
+// 			keyframe_found = false;
+// 		}
 
-		StorageDescription sd;
-		sd.offset = 0;
-		sd.size = 0;
-		int64_t storageTime = 0;
-		map<int64_t,StorageDescription>::const_iterator scan;
+// 		StorageDescription sd;
+// 		sd.offset = 0;
+// 		sd.size = 0;
+// 		int64_t storageTime = 0;
+// 		map<int64_t,StorageDescription>::const_iterator scan;
 
-		if ( scan_time != 0 )
-		{
-			storage_mutex.lock();
-			scan = storageMap.upper_bound( scan_time );
-			if ( scan != storageMap.end() )
-			{
-				storageTime = scan->first;
-				sd = scan->second;
-			}
-			storage_mutex.unlock();
-		}
+// 		if ( scan_time != 0 )
+// 		{
+// 			storage_mutex.lock();
+// 			scan = storageMap.upper_bound( scan_time );
+// 			if ( scan != storageMap.end() )
+// 			{
+// 				storageTime = scan->first;
+// 				sd = scan->second;
+// 			}
+// 			storage_mutex.unlock();
+// 		}
 
-		if ( storageTime != 0 )
-		{
-			keyframe_found = keyframe_found || sd.key_frame;
+// 		if ( storageTime != 0 )
+// 		{
+// 			keyframe_found = keyframe_found || sd.key_frame;
 
-			if ( keyframe_found && videoFile.is_open() && textFile.is_open() )
-			{
-				int64_t remainder = STORAGE_SIZE - sd.offset;
-				char* ps = (char *)storage;
-				if ( sd.size <= remainder )
-					videoFile.write( ps+sd.offset, sd.size );
-				else
-				{
-					videoFile.write( ps+sd.offset, remainder );
-					videoFile.write( ps, sd.size-remainder );
-				}
+// 			if ( keyframe_found && videoFile.is_open() && textFile.is_open() )
+// 			{
+// 				int64_t remainder = STORAGE_SIZE - sd.offset;
+// 				char* ps = (char *)storage;
+// 				if ( sd.size <= remainder )
+// 					videoFile.write( ps+sd.offset, sd.size );
+// 				else
+// 				{
+// 					videoFile.write( ps+sd.offset, remainder );
+// 					videoFile.write( ps, sd.size-remainder );
+// 				}
 
-				string dateTime = dateTimeString( storageTime );
-				textFile << std::setw(4) << ++frame_count 
-				         << " " << dateTime 
-						 << std::setw(7) << sd.size << std::endl;
+// 				string dateTime = dateTimeString( storageTime );
+// 				textFile << std::setw(4) << ++frame_count 
+// 				         << " " << dateTime 
+// 						 << std::setw(7) << sd.size << std::endl;
 
-				// std::cerr << frame_count << std::endl;
-			}
+// 				// std::cerr << frame_count << std::endl;
+// 			}
 
-			scan_time = storageTime+1;
-		}
-	}
-}
+// 			scan_time = storageTime+1;
+// 		}
+// 	}
+// }
 
 void SentinelCamera::readCalibrationParameters()
 {
@@ -2416,14 +2476,10 @@ void SentinelCamera::makeComposite( string filePath )
 	memset(composeBuffer,0,1920*1088);
 	memset(composeBuffer+1920*1088,128,1920*1088/2);
 
-	std::cerr << "Create decoder" << std::endl;
-	createDecoder();
-	runDecoder( filePath, fmax );
-	stopDecoder();
-	std::cerr << "Stop decoder" << std::endl;
+	processDecoded( filePath, fmax );
 
-	std::filesystem::path p = filePath;
-	p.replace_extension(".jpg");
+	string p = filePath;
+	p.replace(p.find(".h264"),5,".jpg");
 
 	encodeJPEG( composeBuffer, p );
 
@@ -2494,11 +2550,7 @@ void SentinelCamera::makeAnalysis( string filePath )
 
 	readMask();
 
-	std::cerr << "Create decoder" << std::endl;
-	createDecoder();
-	runDecoder( filePath, add30 );
-	stopDecoder();
-	std::cerr << "Stop decoder" << std::endl;
+	processDecoded( filePath, add30 );
 
     for ( int iy = 0; iy < 1080; ++iy )
     {
@@ -2523,17 +2575,13 @@ void SentinelCamera::makeAnalysis( string filePath )
         }
     }
 
-	std::cerr << "Create decoder" << std::endl;
-	createDecoder();
-	runDecoder( filePath, centroid );
-	stopDecoder();
-	std::cerr << "Stop decoder" << std::endl;
+	processDecoded( filePath, centroid );
 
 	delete [] averageBuffer;
 	delete [] maskFrame;
 
-	std::filesystem::path txtPath = filePath;
-	txtPath.replace_extension(".csv");
+	string txtPath = filePath;
+	txtPath.replace(txtPath.find(".h264"),5,".csv");
 
 	std::ofstream out( txtPath );
 	if ( !out.is_open() )
@@ -2574,8 +2622,8 @@ void SentinelCamera::makeStarChart( string filePath )
 	memset(averageBuffer, 0, sizeof(int)*1920*1080);
 	memset(composeBuffer+1920*1088, 128, 1920*1088/2);
 
-	std::filesystem::path textPath = filePath;
-	textPath.replace_extension(".txt");
+	string textPath = filePath;
+	textPath.replace(textPath.find(".h264"),5,".txt");
 
 	std::ifstream in(textPath);
 	if ( !in.is_open() )
@@ -2602,9 +2650,7 @@ void SentinelCamera::makeStarChart( string filePath )
 		return count < 2*halfCount;;
 	};
 
-	createDecoder();
-	runDecoder( filePath, delta );
-	stopDecoder();
+	processDecoded( filePath, delta );
 
 	for ( int i = 0; i < 1920*1080; ++i )
 	{
@@ -2614,8 +2660,8 @@ void SentinelCamera::makeStarChart( string filePath )
 		composeBuffer[i] = scaled;
 	}
 
-	std::filesystem::path p = filePath;
-	p.replace_extension(".jpeg");
+	string p = filePath;
+	p.replace(p.find(".h264"),5,".jpeg");
 
 	encodeJPEG( composeBuffer, p );
 
@@ -2625,9 +2671,9 @@ void SentinelCamera::makeStarChart( string filePath )
 
 void SentinelCamera::forceEvent()
 {
-	check_mutex.lock();
+	meta_check_mutex.lock();
 	force_event = true;
-	check_mutex.unlock();
+	meta_check_mutex.unlock();
 }
 
 void sendOK( bool ok )
@@ -2652,7 +2698,7 @@ string executeCommand( SentinelCamera& sentinelCamera, std::istringstream& iss )
 	else if ( cmd == "get_zenith_amplitude" )
 	{
 		sentinelCamera.zenith_mutex.lock();
-		oss << sentinelCamera.zenithAmplitude;
+		oss << sentinelCamera.averageZenithAmplitude;
 		sentinelCamera.zenith_mutex.unlock();
 	}
 	else if ( cmd == "get_noise" )
@@ -2894,13 +2940,6 @@ void runSingle( int frame_count, int force_count, int noise_level )
 	sentinelCamera.completeShutdown();
 }
 
-void runUsbTest()
-{
-	SentinelCamera sentinelCamera;
-
-	sentinelCamera.start2();
-}
-
 void runDecoderTest( string path )
 {	
 	SentinelCamera camera;
@@ -2917,7 +2956,6 @@ int main( int argc, char **argv )
 {
 	bool decoder_test = false;
 	bool analysis_test = false;
-	bool usb_test = false;
 	bool socket_interface = false;
 	int frame_count = 300;
 	int force_count = 200;
@@ -2926,12 +2964,11 @@ int main( int argc, char **argv )
 
 	int opt;
 
-	while ((opt = getopt(argc, argv, "a:usd:c:f:n:")) != -1)
+	while ((opt = getopt(argc, argv, "a:sd:c:f:n:")) != -1)
 	{
 		switch ( opt )
 		{
 			case 'a': analysis_test = true; path = optarg; break;
-			case 'u': usb_test = true; break;
 			case 's': socket_interface = true; break;
 			case 'd': decoder_test = true; path = optarg; break;
 			case 'c': frame_count = std::stoi( optarg ); break;
@@ -2944,8 +2981,6 @@ int main( int argc, char **argv )
 		runDecoderTest( path );
 	else if ( analysis_test )
 		runAnalysisTest( path );
-	else if ( usb_test )
-		runUsbTest();
 	else if ( socket_interface )
 		runSocket();
 	else
