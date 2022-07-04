@@ -300,7 +300,7 @@ class SentinelServer(object):
         return response
         
     def connectToSentinel(self):
-        pid = Popen(["builddir/sentinel", "-s"]).pid
+        pid = Popen(["./pi-sentinel.bin", "-s"]).pid
         time.sleep(2.0)
         self.sentinelSocket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.sentinelSocket.connect("/tmp/sentinel.sock")

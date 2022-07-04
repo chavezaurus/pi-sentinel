@@ -97,8 +97,9 @@ private:
     // mutex requestMutex;
     // condition_variable requestCondition;
     // bool abortRequestThread;
+    bool abortDeviceThread;
     bool abortCheckThread;
-    bool abortEventThread;
+    // bool abortEventThread;
     bool abortDecoderThread;
     // bool abortPoll;
     // bool abortOutput;
@@ -178,6 +179,7 @@ public:
     // void requestThread();
     // void pollThread();
     // void outputThread();
+    void measureFrameRate(unsigned microseconds);
     void checkThread();
     // void eventThread();
     void archiveThread();
@@ -236,6 +238,7 @@ public:
 
     mutex zenith_mutex;
     double averageZenithAmplitude;
+    double frameRate;
 	
     int sumThreshold;
 };

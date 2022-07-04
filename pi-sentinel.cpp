@@ -108,9 +108,10 @@ SentinelCamera::SentinelCamera()
 	moonx = 0;
 	moony = 0;
 	force_count = 0;
-	sumThreshold = 35;
+	sumThreshold = 50;
 	max_events_per_hour = 5;
 	averageZenithAmplitude = 0.0;
+	frameRate = 30.0;
 	force_event = false;
 
 	syncTime();
@@ -209,13 +210,19 @@ void SentinelCamera::initDevice()
     if (-1 == xioctl(device_fd, VIDIOC_G_FMT, &fmt))
 		throw std::runtime_error("Error with VIDIOC_G_FMT");
 
-    fmt.fmt.pix.width = 1920;
-    fmt.fmt.pix.height = 1080;
-    fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_H264;
-    fmt.fmt.pix.field = V4L2_FIELD_NONE;
+	if ( fmt.fmt.pix.width != 1920 ||
+	     fmt.fmt.pix.height != 1080 ||
+		 fmt.fmt.pix.pixelformat != V4L2_PIX_FMT_H264 ||
+		 fmt.fmt.pix.field != V4L2_FIELD_NONE )
+	{
+    	fmt.fmt.pix.width = 1920;
+    	fmt.fmt.pix.height = 1080;
+    	fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_H264;
+    	fmt.fmt.pix.field = V4L2_FIELD_NONE;
 
-    if (-1 == xioctl(device_fd, VIDIOC_S_FMT, &fmt))
-		throw std::runtime_error("Error with VIDIOC_S_FMT");
+    	if (-1 == xioctl(device_fd, VIDIOC_S_FMT, &fmt))
+			throw std::runtime_error("Error with VIDIOC_S_FMT");
+	}
 
     CLEAR(req);
 
@@ -457,7 +464,7 @@ void SentinelCamera::decoderThread()
 
 		auto* coded = coded_free.back();
 		coded_free.pop_back();
-		std::cerr << "coded Q " << decoderIndex << std::endl;
+		// std::cerr << "coded Q " << decoderIndex << std::endl;
 
 		memcpy( coded->mmap, (void *)ptr, frameSize );
 		coded->plane.bytesused = frameSize;
@@ -503,8 +510,8 @@ void SentinelCamera::decoderThread()
 			storageMetas[metaCheckIndex].signalAmplitude = sa;
 
             // decoded_free.push_back(decoded);
-			std::cerr << "decoded DQ " << metaCheckIndex << " " 
-					  << sa << std::endl;
+			// std::cerr << "decoded DQ " << metaCheckIndex << " " 
+			// 		  << sa << std::endl;
 
 			meta_check_mutex.lock();
 			metaCheckIndex = (metaCheckIndex+1) % NUM_STORAGE_META;
@@ -528,6 +535,28 @@ void SentinelCamera::decoderThread()
 
 	delete [] referenceFrame;
 	delete [] maskFrame;
+}
+
+//
+// Measure the filtered frame rate
+// If the frame rate drops we may want to switch to manual exposure mode.
+//
+void SentinelCamera::measureFrameRate(unsigned microseconds)
+{
+    static unsigned int lastMicrosecond = 0;
+
+    if ( microseconds > lastMicrosecond )
+    {
+        unsigned delta = microseconds - lastMicrosecond;
+        if ( delta > 20000 && delta < 100000 )
+        {
+            double rate = 1.0e6 / delta;
+
+            frameRate = 0.99 * frameRate + 0.01 * rate;
+        }
+    }
+
+    lastMicrosecond = microseconds;
 }
 
 void SentinelCamera::deviceCaptureThread()
@@ -558,6 +587,9 @@ void SentinelCamera::deviceCaptureThread()
 		if ( ret == -1 )
 			throw std::runtime_error("Poll error");
 
+		if ( abortDeviceThread )
+			break;
+
 		if ( ret == 0 )
 		{
 			std::cerr << "Poll timeout" << std::endl;
@@ -576,7 +608,7 @@ void SentinelCamera::deviceCaptureThread()
 		if ( offset + buf.bytesused > STORAGE_SIZE )
 		{
 			offset = 0;
-			std::cerr << "Storage full" << std::endl;
+			// std::cerr << "Storage full" << std::endl;
 		}
 
 		// Write H264 frame to ram storage
@@ -587,6 +619,8 @@ void SentinelCamera::deviceCaptureThread()
 		meta.size = buf.bytesused;
 		meta.timestamp_us = buf.timestamp.tv_sec * 1000000.0 + buf.timestamp.tv_usec;
 		meta.key_frame = isIDR(storage+offset, buf.bytesused);
+
+		measureFrameRate(buf.timestamp.tv_usec);
 
 		// std::cerr << metaWriteIndex << " " << meta.size << " " << meta.timestamp_us << std::endl;
 
@@ -607,6 +641,10 @@ void SentinelCamera::deviceCaptureThread()
     	if (-1 == xioctl(device_fd, VIDIOC_QBUF, &buf))
 			throw std::runtime_error("Error with VIDIOC_QBUF");
 	}
+
+	stopDeviceCapture();
+	uninitDevice();
+	closeDevice();
 }
 
 // void SentinelCamera::requestComplete(Request* request)
@@ -856,17 +894,17 @@ void SentinelCamera::start()
 void SentinelCamera::initiateShutdown()
 {
 	abortCheckThread = true;
-    abortEventThread = true;
     abortDecoderThread = true;
     abortArchiveThread = true;
+	abortDeviceThread = true;
 }
 
 void SentinelCamera::completeShutdown()
 {
-	device_thread.join();
+	check_thread.join();
 	decoder_thread.join();
 	archive_thread.join();
-	check_thread.join();
+	device_thread.join();
 }
 
 void SentinelCamera::stop()
@@ -1119,11 +1157,12 @@ void SentinelCamera::processDecoded( string videoFilePath, ProcessType process )
 			int frameCount = 0;
 			string timeValue;
 			int frameSize = 0;
+			int signalAmplitude = 0;
 
 			auto* coded = coded_free.back();
 			coded_free.pop_back();
 
-			textFile >> frameCount >> timeValue >> frameSize;
+			textFile >> frameCount >> timeValue >> frameSize >> signalAmplitude;
 			if ( !textFile.fail() )
 			{
 				videoFile.read( (char *)coded->mmap, frameSize );
@@ -1906,7 +1945,7 @@ void SentinelCamera::checkThread()
 		while ( !storageMetas[writeIndex].key_frame )
 		{
 			writeIndex = (writeIndex + NUM_STORAGE_META - 1) % NUM_STORAGE_META;
-			++frameOffset;
+			--frameOffset;
 		}
 
 		while ( writeIndex != ((checkIndex+1) % NUM_STORAGE_META) )
@@ -1918,7 +1957,8 @@ void SentinelCamera::checkThread()
 			string dateTime = dateTimeString( sMeta.timestamp_us );
 			textFile << std::setw(4) << frameOffset++
 				     << " " << dateTime 
-					 << std::setw(7) << sMeta.size << std::endl;
+					 << std::setw(7) << sMeta.size << " "
+					 << std::setw(7) << sMeta.signalAmplitude << std::endl;
 		}
 	};
 
@@ -1929,7 +1969,8 @@ void SentinelCamera::checkThread()
 		string dateTime = dateTimeString( sMeta.timestamp_us );
 		textFile << std::setw(4) << frameOffset++
 				 << " " << dateTime 
-				 << std::setw(7) << sMeta.size << std::endl;
+				 << std::setw(7) << sMeta.size << " "
+				 << std::setw(7) << sMeta.signalAmplitude << std::endl;
 
 	};
 
@@ -2694,7 +2735,7 @@ string executeCommand( SentinelCamera& sentinelCamera, std::istringstream& iss )
 	if ( cmd == "get_running" )
 		oss << (sentinelCamera.running ? "Yes" : "No");
 	else if ( cmd == "get_frame_rate" )
-		oss << "0";
+		oss << sentinelCamera.frameRate;
 	else if ( cmd == "get_zenith_amplitude" )
 	{
 		sentinelCamera.zenith_mutex.lock();
@@ -2936,6 +2977,7 @@ void runSingle( int frame_count, int force_count, int noise_level )
 	SentinelCamera sentinelCamera;
 
 	sentinelCamera.max_frame_count = frame_count;
+	sentinelCamera.force_count = force_count;
 	sentinelCamera.start();
 	sentinelCamera.completeShutdown();
 }
