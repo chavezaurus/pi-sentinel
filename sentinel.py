@@ -615,23 +615,26 @@ class SentinelServer(object):
 
         t0 = dt.timestamp()
         tm = t0 - 2
-        tp = t0 + data["duration"]
+        tp = t0 + data["duration"] + 1
 
-        firstMinute = int( tm / 60 )
-        lastMinute  = int( tp / 60 )
+        tm_string = datetime.datetime.utcfromtimestamp(tm).strftime("%Y%m%d_%H%M%S_000")
+        tp_string = datetime.datetime.utcfromtimestamp(tp).strftime("%Y%m%d_%H%M%S_000")
 
         l = []
 
-        for minute in range(firstMinute,lastMinute+1):
-            path0 = f"{self.archivePath}/s{minute//60}/s{minute}.h264"
+        while tm < tp:
+            dtt = datetime.datetime.utcfromtimestamp(tm)
+            path0 = self.archivePath + "/s" + dtt.strftime("%Y%m%d_%H") 
+            path0 += "/s" + dtt.strftime("%Y%m%d_%H%M") + ".h264"
             if path0 not in l and os.path.exists(path0) and os.path.exists(path0.replace(".h264",".txt")):
                 l.append(path0)
+            tm = tm + 1
 
         if len(l) == 0:
             return { "response": "Archive file not found"}
 
         utc = datetime.datetime.utcfromtimestamp(t0)
-        playbackPath = utc.strftime("new/s%Y%m%d_%H%M%S.h264")
+        playbackPath = utc.strftime("new/s%Y%m%d_%H%M%S_000.h264")
 
         pbv = None
         pbt = None
@@ -653,17 +656,13 @@ class SentinelServer(object):
                     break
 
                 items = line.split()
-                ftime = float(items[0])
+                ftime = items[0]
                 fsize = int(items[1])
 
-                # GPS Time offset should be the third item on the first line of the archive text file
-                if len(items) == 3:
-                    gpsTimeOffset = float(items[2])
-
-                if ftime > tp:
+                if ftime > tp_string:
                     break
 
-                if ftime < tm:
+                if ftime < tm_string:
                     fv.seek(fsize,1)
                     continue
 
@@ -679,11 +678,9 @@ class SentinelServer(object):
                 count = count+1
                 pbv.write(frame)
                 if count == 1:
-                    # Make GPS Time offset the third item on the first line of the event text file
-                    pbt.write("%3d %7.3f %7.3f\n" % (count,ftime-t0,gpsTimeOffset))
                     firstFrameTime = ftime
-                else:
-                    pbt.write("%3d %7.3f\n" % (count,ftime-t0))
+
+                pbt.write("%3d %s %7d 0\n" % (count,ftime,fsize))
 
                 lastFrameTime = ftime
 
@@ -698,10 +695,13 @@ class SentinelServer(object):
 
         framesPerSecond = 30
         if lastFrameTime != firstFrameTime:
-            framesPerSecond = int(round((count-1)/(lastFrameTime-firstFrameTime)))
+            dt_last  = datetime.datetime.strptime(lastFrameTime+"000","%Y%m%d_%H%M%S_%f")
+            dt_first = datetime.datetime.strptime(firstFrameTime+"000","%Y%m%d_%H%M%S_%f")
+            duration = (dt_last - dt_first).total_seconds()
+            framesPerSecond = int(round((count-1)/duration))
 
         mp4File = playbackPath.replace(".h264",".mp4")
-        subprocess.run(["MP4Box", "-add",  playbackPath, "-fps", "%d" % framesPerSecond, "-quiet", "-new", mp4File]) 
+        pid = Popen(["MP4Box", "-add", playbackPath, "-fps", "%d" % framesPerSecond, "-quiet", "-new", mp4File]).pid
 
         return { "response": "OK"}
 

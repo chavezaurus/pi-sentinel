@@ -390,7 +390,7 @@ void SentinelCamera::decoderThread()
 {
 	createDecoder();
 
-	abortDecoderThread = 0;
+	abortDecoderThread = false;
 	int decoderIndex = 0;
 
 	referenceFrame = new unsigned char[CHECK_FRAME_SIZE];
@@ -565,6 +565,7 @@ void SentinelCamera::deviceCaptureThread()
 	initDevice();
 	startDeviceCapture();
 
+	abortDeviceThread = false;
 	storage = new unsigned char[STORAGE_SIZE];
 
     v4l2_buffer buf;
@@ -905,6 +906,7 @@ void SentinelCamera::completeShutdown()
 	decoder_thread.join();
 	archive_thread.join();
 	device_thread.join();
+	std::cerr << "Shutdown" << std::endl;
 }
 
 void SentinelCamera::stop()
