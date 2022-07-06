@@ -66,8 +66,13 @@ GPIO.setmode(GPIO.BCM)
 GPIO.setup(4,GPIO.IN)
 GPIO.add_event_detect( 4,GPIO.RISING,callback=my_callback,bouncetime=100)
 
+try:
+    ser = serial.Serial(port, baudrate = 9600, timeout = 0.5)
+except:
+    print("GPS Port not available", file=sys.stderr)
+    exit()
+
 print( "Receiving GPS data", file=sys.stderr )
-ser = serial.Serial(port, baudrate = 9600, timeout = 0.5)
 while True:
     data = ser.readline()
     if now != False:

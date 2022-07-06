@@ -94,16 +94,10 @@ static void Parse( const char* json, map<string,double>& doubleMap )
     }
 }
 
-// vector<SentinelCamera*> SentinelCamera::cameraVector;
-
 SentinelCamera::SentinelCamera()
 {
 	running = false;
-    // id = cameraVector.size();
-    // cameraVector.push_back( this );
 	max_frame_count = 0;
-	// checkBufferHead = 0;
-	// checkBufferTail = 0;
 	noise_level = 45;
 	moonx = 0;
 	moony = 0;
@@ -112,6 +106,7 @@ SentinelCamera::SentinelCamera()
 	max_events_per_hour = 5;
 	averageZenithAmplitude = 0.0;
 	frameRate = 30.0;
+	gpsTimeOffset = 0.0;
 	force_event = false;
 
 	syncTime();
@@ -154,8 +149,6 @@ void SentinelCamera::closeDevice()
     device_fd = -1;
 	std::cerr << "Close device" << std::endl;
 }
-
-
 
 void SentinelCamera::initDevice()
 {
@@ -648,22 +641,6 @@ void SentinelCamera::deviceCaptureThread()
 	closeDevice();
 }
 
-// void SentinelCamera::requestComplete(Request* request)
-// {
-// 	if (request->status() == Request::RequestCancelled)
-// 		return;
-
-//     SentinelCamera* sc = cameraVector[request->cookie()];
-
-// 	sc->requestMutex.lock();
-// 	sc->completedRequests.push_back(request);
-// 	sc->requestMutex.unlock();
-
-// 	sc->requestCondition.notify_one();
-
-//     // std::cerr << "requestComplete" << std::endl;
-// }
-
 void SentinelCamera::syncTime()
 {
 	struct timespec tspec1, tspec2, tspec3, tspec4;
@@ -675,11 +652,17 @@ void SentinelCamera::syncTime()
 	if ( tspec3.tv_sec == tspec1.tv_sec && (tspec3.tv_nsec-tspec1.tv_nsec) < 100000 )
 	{
 		tspec4.tv_sec = tspec2.tv_sec - tspec1.tv_sec;
-		tspec4.tv_nsec = tspec2.tv_nsec - tspec1.tv_nsec;
-		if ( tspec4.tv_nsec < 0 )
+		tspec4.tv_nsec = tspec2.tv_nsec - tspec1.tv_nsec - round(gpsTimeOffset*1.0e9);
+		while ( tspec4.tv_nsec < 0 )
 		{
 			tspec4.tv_nsec += 1000000000;
 			tspec4.tv_sec -= 1;
+		}
+
+		while ( tspec4.tv_nsec >= 1000000000 )
+		{
+			tspec4.tv_nsec -= 1000000000;
+			tspec4.tv_sec += 1;
 		}
 
 		time_offset_mutex.lock();
@@ -689,84 +672,6 @@ void SentinelCamera::syncTime()
 		// std::cerr << time_offset.tv_sec << " " << time_offset.tv_nsec << std::endl;
 	}
 }
-
-// void SentinelCamera::requestThread()
-// {
-
-//     abortRequestThread = false;
-// 	int frame_count = 0;
-// 	Request* request;
-
-//     for (;;)
-//     {
-// 		++frame_count;
-// 		if ( max_frame_count != 0 && frame_count > max_frame_count )
-// 			abortRequestThread = true;
-
-// 		if ( (frame_count % 60) == 0 )
-// 			syncTime();
-
-// 		{
-// 			std::unique_lock<std::mutex> locker(requestMutex);
-// 			requestCondition.wait_for( locker, 200ms, [this]() {
-// 				return !this->completedRequests.empty() || abortRequestThread;
-// 			});
-
-//         	if ( abortRequestThread )
-// 				return;
-
-// 			if ( completedRequests.empty() )
-// 				continue;
-
-// 			request = completedRequests.front();
-// 			completedRequests.pop_front();
-// 		}
-
-// 	    // const Request::BufferMap &buffers = request->buffers();
-
-// 	    // for (auto bufferPair : buffers) 
-//         // {
-// 		    // const libcamera::Stream *stream = bufferPair.first;
-// 		    // std::string config = stream->configuration().toString();
-// 		    // FrameBuffer *buffer = bufferPair.second;
-// 		    // const FrameMetadata &metadata = buffer->metadata();
-// 		    // size_t frameSize = metadata.planes()[0].bytesused;
-
-// 		    // int fd = buffer->planes()[0].fd.fd();
-// 		    // int64_t timestamp_us = metadata.timestamp / 1000;
-
-// 		    // if ( config == "1920x1080-YUV420" )
-// 		    // 	encodeBuffer( fd, frameSize*3/2, timestamp_us );
-// 			// else if ( config == "640x360-YUV420" )
-// 			// 	fillCheckBuffer( fd, timestamp_us );
-// 	    // }
-
-// 	    // Re-queue the Request to the camera.
-// 	    request->reuse(Request::ReuseBuffers);
-// 	    int check = camera->queueRequest(request);
-// 		if ( check != 0 )
-// 			std::cerr << "Queue request failed" << std::endl;
-
-// 		// std::cerr << "requestThread" << std::endl;
-//     }
-// }
-
-// void SentinelCamera::fillCheckBuffer( int fd, int64_t timestamp_us )
-// {
-// 	if ( mappedBuffers.find( fd ) == mappedBuffers.end() )
-// 		mappedBuffers[ fd ] = mmap( NULL, CHECK_FRAME_SIZE, PROT_READ, MAP_SHARED, fd, 0 );
-// 	void* mem = mappedBuffers[ fd ];
-
-// 	CheckBufferDescription& desc = checkBuffers[checkBufferHead];
-// 	memcpy( desc.mem, mem, CHECK_FRAME_SIZE );
-// 	desc.timestamp_us = timestamp_us;
-
-// 	check_mutex.lock();
-// 	checkBufferHead = (checkBufferHead+1) % NUM_CHECK_BUFFERS;
-// 	check_mutex.unlock();
-
-// 	checkCondition.notify_one();
-// }
 
 void SentinelCamera::start()
 {
@@ -780,117 +685,6 @@ void SentinelCamera::start()
 	archive_thread = thread( &SentinelCamera::archiveThread, this );
 	check_thread   = thread( &SentinelCamera::checkThread, this );
 }
-
-// void SentinelCamera::start()
-// {
-// 	if ( running )
-// 		return;
-
-//     cm = new CameraManager();
-//     cm->start();
-
-// 	int count = cm->cameras().size();
-// 	std::cout << "Camera count: " << count << std::endl;
-
-//     if ( cm->cameras().empty() )
-//     {
-//         cm->stop();
-//         throw std::runtime_error("No cameras were identified on the system");
-//     }
-
-// 	std::string cameraId = cm->cameras()[0]->id();
-// 	camera = cm->get(cameraId);
-// 	camera->acquire();
-
-//     // Setup the VideoRecording stream to produce the encoded archive files
-//     // and the ViewFinder stream to produce the frames used for event triggering
-//     config = camera->generateConfiguration( { StreamRole::VideoRecording, StreamRole::Viewfinder } );
-
-// 	StreamConfiguration &streamConfig1 = config->at(0);
-// 	StreamConfiguration &streamConfig2 = config->at(1);
-
-// 	streamConfig2.size.width = 640;
-// 	streamConfig2.size.height = 360;
-// 	streamConfig2.pixelFormat = libcamera::formats::YUV420;
-
-// 	camera->configure(config.get());
-
-// 	allocator = new FrameBufferAllocator(camera);
-
-// 	for (StreamConfiguration &cfg : *config) 
-//     {
-// 		int ret = allocator->allocate(cfg.stream());
-// 		if ( ret < 0 ) 
-//             throw std::runtime_error("Can't allocate buffers");
-// 	}
-
-// 	Stream *stream1 = streamConfig1.stream();
-// 	Stream *stream2 = streamConfig2.stream();
-
-// 	const std::vector<std::unique_ptr<FrameBuffer>> &buffers1 = allocator->buffers(stream1);
-// 	const std::vector<std::unique_ptr<FrameBuffer>> &buffers2 = allocator->buffers(stream2);
-
-// 	requests.clear();
-
-// 	std::cerr << "Camera buffers: " << buffers1.size() << std::endl;
-
-// 	for (unsigned int i = 0; i < buffers1.size(); ++i) 
-//     {
-// 		std::unique_ptr<Request> request = camera->createRequest( id );
-// 		if ( !request )
-//             throw std::runtime_error("Can't create request");
-
-// 		const std::unique_ptr<FrameBuffer> &buffer1 = buffers1[i];
-// 		int ret = request->addBuffer(stream1, buffer1.get());
-// 		if ( ret < 0 )
-//             throw std::runtime_error("Can't set buffer for request");
-
-// 		const std::unique_ptr<FrameBuffer> &buffer2 = buffers2[i];
-// 		ret = request->addBuffer(stream2, buffer2.get());
-// 		if ( ret < 0 )
-//             throw std::runtime_error("Can't set buffer for request");
-
-
-// 		requests.push_back(std::move(request));
-// 	}
-
-//     camera->requestCompleted.connect(requestComplete);
-// 	while ( !input_buffers_available.empty() )
-// 		input_buffers_available.pop();
-
-// 	for ( int i = 0; i < NUM_CHECK_BUFFERS; ++i )
-// 	{
-// 		checkBuffers[i].mem = new unsigned char[CHECK_FRAME_SIZE];
-// 		checkBuffers[i].timestamp_us = 0;
-// 	}
-
-// 	createEncoder();
-
-// 	completedRequests.clear();
-
-//     request_thread = thread( &SentinelCamera::requestThread, this );
-//     poll_thread = thread( &SentinelCamera::pollThread, this );
-//     output_thread = thread( &SentinelCamera::outputThread, this );
-// 	check_thread = thread( &SentinelCamera::checkThread, this );
-// 	event_thread = thread( &SentinelCamera::eventThread, this );
-
-// 	//
-//     // Set frame rate to 30/sec
-//     //
-// 	ControlList controls;
-// 	int64_t frame_time = 1000000 / 30; // in us
-// 	controls.set(controls::FrameDurationLimits, { frame_time, frame_time });
-// 	controls.set(controls::AnalogueGain, 30.0);
-
-// 	camera->start( &controls );
-// 	for (std::unique_ptr<Request> &request : requests)
-// 	{
-// 		request->reuse(Request::ReuseBuffers);
-// 		camera->queueRequest(request.get());
-// 	}
-
-// 	running = true;
-// }
 
 void SentinelCamera::initiateShutdown()
 {
@@ -1220,139 +1014,6 @@ void SentinelCamera::processDecoded( string videoFilePath, ProcessType process )
 	stopDecoder();
 }
 
-// void SentinelCamera::runDecoder( string videoFilePath, ProcessType process ) 
-// {
-// 	std::ifstream videoFile;
-// 	videoFile.open( videoFilePath.c_str(), std::ios::binary );
-// 	if ( !videoFile.is_open() )
-// 		return;
-
-// 	size_t index = videoFilePath.find(".h264");
-// 	if ( index == string::npos )
-// 		return;
-
-// 	string textFilePath = videoFilePath;
-// 	textFilePath.replace( index, 5, ".txt" );
-
-// 	// std::cerr << textFilePath << std::endl;
-
-// 	std::ifstream textFile;
-// 	textFile.open( textFilePath.c_str() );
-// 	if ( !textFile.is_open() )
-// 		return;
-
-//     auto const coded_buf_type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
-//     auto const decoded_buf_type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-//     auto const coded_buffers = map_decoder_buffers(coded_buf_type);
-//     auto const decoded_buffers = map_decoder_buffers(decoded_buf_type);
-
-//     std::vector<MappedBuffer*> coded_free, decoded_free;
-//     for (auto const &b : coded_buffers) 
-// 		coded_free.push_back(b.get());
-//     for (auto const &b : decoded_buffers) 
-// 		decoded_free.push_back(b.get());
-
-//     v4l2_plane received_plane = {};
-//     v4l2_buffer received = {};
-//     received.memory = V4L2_MEMORY_MMAP;
-//     received.length = 1;
-//     received.m.planes = &received_plane;
-
-//     bool drained = false;
-
-// 	std::list<string> timeList;
-
-//     v4l2_decoder_cmd command = {};
-//     command.cmd = V4L2_DEC_CMD_START;
-//     if (v4l2_ioctl(decoder_fd, VIDIOC_DECODER_CMD, &command)) 
-// 		throw std::runtime_error("error sending start");
-
-//     while (!drained) 
-// 	{
-//         // Reclaim coded buffers once consumed by the decoder.
-//         received.type = coded_buf_type;
-//         while (!v4l2_ioctl(decoder_fd, VIDIOC_DQBUF, &received)) 
-// 		{
-//             if (received.index > coded_buffers.size()) 
-// 				throw std::runtime_error( "bad reclaimed indes");
-//             coded_free.push_back(coded_buffers[received.index].get());
-//         }
-//         if (errno != EAGAIN)
-// 			throw std::runtime_error( "error reclaiming coded buffer");
-
-//         // Push coded data into the decoder.
-//         while (!coded_free.empty() && !textFile.eof() ) 
-// 		{
-//             auto* coded = coded_free.back();
-//             coded_free.pop_back();
-//             coded->plane.bytesused = 0;
-
-// 			int frameCount = 0;
-// 			string timeValue;
-// 			int frameSize = 0;
-
-// 			textFile >> frameCount >> timeValue >> frameSize;
-			
-// 			if ( !textFile.fail() )
-// 			{
-// 				timeList.push_back( timeValue );
-
-// 				// std::cerr << frameCount << " " << timeValue << " " << frameSize << std::endl;
-
-// 				videoFile.read( (char *)coded->mmap, frameSize );
-// 				coded->plane.bytesused = frameSize;
-
-//             	if (v4l2_ioctl(decoder_fd, VIDIOC_QBUF, &coded->buffer))
-// 					throw std::runtime_error("error sending coded buffer");
-// 			}
-// 			else
-// 			{
-//                 v4l2_decoder_cmd command = {};
-//                 command.cmd = V4L2_DEC_CMD_STOP;
-//                 if (v4l2_ioctl(decoder_fd, VIDIOC_DECODER_CMD, &command)) 
-// 					throw std::runtime_error("error sending STOP");
-//             }
-//         }
-
-//         // Send empty decoded buffers to be filled by the decoder.
-//         while (!decoded_free.empty()) 
-// 		{
-//             auto* decoded = decoded_free.back();
-//             decoded_free.pop_back();
-
-//             if (v4l2_ioctl(decoder_fd, VIDIOC_QBUF, &decoded->buffer))
-// 				throw std::runtime_error( "error cycling buffer " );
-//         }
-
-//         // Receive decoded data and return the buffers.
-//         received.type = decoded_buf_type;
-//         while (!drained && !v4l2_ioctl(decoder_fd, VIDIOC_DQBUF, &received)) 
-// 		{
-//             if (received.index > decoded_buffers.size())
-// 				throw std::runtime_error( "bad decoded index");
-
-//             drained = (received.flags & V4L2_BUF_FLAG_LAST);
-//             auto* decoded = decoded_buffers[received.index].get();
-//             //
-// 			if ( !timeList.empty() )
-// 			{
-// 				string time = timeList.front();
-// 				timeList.pop_front();
-// 				bool more = process( decoded->mmap, time );
-// 				if ( !more )
-// 					drained = true;
-// 			}
-
-//             decoded_free.push_back(decoded);
-//         }
-//         if (errno != EAGAIN)
-// 			throw std::runtime_error( "error receiving decoded buffers" );
-
-//         // Poll after a 3ms delay -- TODO use poll() instead
-//         std::this_thread::sleep_for(std::chrono::milliseconds(3));
-//     }
-// }
-
 void SentinelCamera::stopDecoder() 
 {
     int coded_type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
@@ -1577,122 +1238,6 @@ void SentinelCamera::createEncoder()
 	// std::cerr << "Codec streaming started" << std::endl;
 }
 
-// void SentinelCamera::encodeBuffer(int fd, size_t size, int64_t timestamp_us)
-// {
-// 	int index;
-// 	{
-// 		// We need to find an available output buffer (input to the codec) to
-// 		// "wrap" the DMABUF.
-// 		std::lock_guard<std::mutex> lock(input_buffers_available_mutex);
-// 		if (input_buffers_available.empty())
-// 			throw std::runtime_error("no buffers available to queue codec input");
-// 		index = input_buffers_available.front();
-// 		input_buffers_available.pop();
-// 	}
-// 	v4l2_buffer buf = {};
-// 	v4l2_plane planes[VIDEO_MAX_PLANES] = {};
-// 	buf.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
-// 	buf.index = index;
-// 	buf.field = V4L2_FIELD_NONE;
-// 	buf.memory = V4L2_MEMORY_DMABUF;
-// 	buf.length = 1;
-// 	buf.timestamp.tv_sec = timestamp_us / 1000000;
-// 	buf.timestamp.tv_usec = timestamp_us % 1000000;
-// 	buf.m.planes = planes;
-// 	buf.m.planes[0].m.fd = fd;
-// 	buf.m.planes[0].bytesused = size;
-// 	buf.m.planes[0].length = size;
-// 	if (xioctl(encoder_fd, VIDIOC_QBUF, &buf) < 0)
-// 		throw std::runtime_error("failed to queue input to codec");
-// }
-
-// void SentinelCamera::pollThread()
-// {
-//     abortPoll = false;
-
-// 	while (true)
-// 	{
-// 		pollfd p = { encoder_fd, POLLIN, 0 };
-// 		int ret = poll(&p, 1, 200);
-// 		{
-// 			std::lock_guard<std::mutex> lock(input_buffers_available_mutex);
-// 			if (abortPoll && input_buffers_available.size() == NUM_OUTPUT_BUFFERS)
-// 				break;
-// 		}
-// 		if (ret == -1)
-// 		{
-// 			if (errno == EINTR)
-// 				continue;
-// 			throw std::runtime_error("unexpected errno " + std::to_string(errno) + " from poll");
-// 		}
-// 		if (p.revents & POLLIN)
-// 		{
-// 			v4l2_buffer buf = {};
-// 			v4l2_plane planes[VIDEO_MAX_PLANES] = {};
-// 			buf.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
-// 			buf.memory = V4L2_MEMORY_DMABUF;
-// 			buf.length = 1;
-// 			buf.m.planes = planes;
-// 			int ret = xioctl(encoder_fd, VIDIOC_DQBUF, &buf);
-// 			if (ret == 0)
-// 			{
-// 				// Return this to the caller, first noting that this buffer, identified
-// 				// by its index, is available for queueing up another frame.
-// 				{
-// 					std::lock_guard<std::mutex> lock(input_buffers_available_mutex);
-// 					input_buffers_available.push(buf.index);
-// 				}
-// 				// input_done_callback_(nullptr);
-// 			}
-
-// 			buf = {};
-// 			memset(planes, 0, sizeof(planes));
-// 			buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-// 			buf.memory = V4L2_MEMORY_MMAP;
-// 			buf.length = 1;
-// 			buf.m.planes = planes;
-// 			ret = xioctl(encoder_fd, VIDIOC_DQBUF, &buf);
-// 			if (ret == 0)
-// 			{
-// 				// We push this encoded buffer to another thread so that our
-// 				// application can take its time with the data without blocking the
-// 				// encode process.
-// 				int64_t timestamp_us = (buf.timestamp.tv_sec * (int64_t)1000000) + buf.timestamp.tv_usec;
-// 				OutputItem item = { buffers[buf.index].mem,
-// 									buf.m.planes[0].bytesused,
-// 									buf.m.planes[0].length,
-// 									buf.index,
-// 									!!(buf.flags & V4L2_BUF_FLAG_KEYFRAME),
-// 									timestamp_us };
-// 				std::lock_guard<std::mutex> lock(output_mutex);
-// 				output_queue.push(item);
-// 				output_cond_var.notify_one();
-// 			}
-// 		}
-// 	}
-// }
-
-// string SentinelCamera::secondsString( int64_t timestamp_us )
-// {
-// 	char buff[20];
-
-// 	time_offset_mutex.lock();
-// 	timespec ts = time_offset;
-// 	time_offset_mutex.unlock();
-
-// 	long seconds = ts.tv_sec + timestamp_us / 1000000;
-// 	int microsecs = ts.tv_nsec / 1000 + timestamp_us % 1000000;
-
-// 	if ( microsecs >= 1000000 )
-// 	{
-// 		microsecs -= 1000000;
-// 		seconds += 1;
-// 	}
-
-// 	sprintf( buff, "%ld.%06d", seconds, microsecs );
-// 	return buff;
-// }
-
 string SentinelCamera::dateTimeString( int64_t timestamp_us )
 {
 	char buff[50];
@@ -1780,118 +1325,6 @@ void SentinelCamera::archiveThread()
 	}
 }
 
-// void SentinelCamera::outputThread()
-// {
-//     abortOutput = false;
-
-// 	bool keyfound = false;
-// 	std::ofstream videoFile;
-// 	std::ofstream textFile;
-// 	string oldMinute = "20220101_0000";
-
-// 	storage = new unsigned char[STORAGE_SIZE];
-// 	unsigned int offset = 0;
-
-// 	OutputItem item;
-// 	while (true)
-// 	{
-// 		{
-// 			std::unique_lock<std::mutex> locker(output_mutex);
-// 			output_cond_var.wait_for( locker, 200ms, [this]() {
-// 				return abortOutput || !output_queue.empty();
-// 			});
-
-// 			if ( abortOutput && output_queue.empty() )
-// 				break;
-
-// 			if ( output_queue.empty() )
-// 				continue;
-
-// 			item = output_queue.front();
-// 			output_queue.pop();
-// 		}
-
-// 		unsigned int remainder = STORAGE_SIZE - offset;
-// 		if ( remainder >= item.bytes_used )
-// 		{
-// 			memcpy( storage+offset, item.mem, item.bytes_used );
-// 		}
-// 		else
-// 		{
-// 			memcpy( storage+offset, item.mem, remainder );
-// 			memcpy( storage, (unsigned char*)item.mem+remainder, item.bytes_used-remainder );
-// 		}
-
-// 		StorageDescription sd;
-// 		sd.offset = offset;
-// 		sd.size = item.bytes_used;
-// 		sd.key_frame = item.keyframe;
-
-// 		storage_mutex.lock();
-// 		storageMap[item.timestamp_us] = sd;
-// 		if ( storageMap.size() > 150 )
-// 			storageMap.erase( storageMap.begin() );
-// 		storage_mutex.unlock();
-
-// 		offset = (offset + item.bytes_used) % STORAGE_SIZE;
-
-// 		keyfound = keyfound || item.keyframe != 0;
-// 		string dateTime = dateTimeString(item.timestamp_us);
-// 		string minuteString = dateTime.substr(0,13);
-
-// 		if ( minuteString != oldMinute && item.keyframe != 0 && !archivePath.empty() )
-// 		{
-// 			oldMinute = minuteString;
-// 			if ( videoFile.is_open() )
-// 				videoFile.close();
-// 			if ( textFile.is_open() )
-// 				textFile.close();
-
-// 			string hourString = minuteString.substr(0,11);
-
-// 			std::filesystem::path folderPath = archivePath;
-// 			folderPath.append("s");
-// 			folderPath.concat( hourString );
-// 			int e = mkdir( folderPath.c_str(), S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH );
-//         	if ( e == -1 && errno != EEXIST )
-//             	std::cerr << "Could not create archive folder: " << folderPath << std::endl;
-
-// 			std::filesystem::path videoPath = folderPath;
-// 			videoPath.append("s");
-// 			videoPath.concat( minuteString );
-// 			videoPath.concat( ".h264" );
-
-// 			std::cerr << videoPath << std::endl;
-
-// 			std::filesystem::path textPath = videoPath;
-// 			textPath.replace_extension(".txt");
-
-// 			videoFile.open( videoPath, std::ios::binary );
-// 			textFile.open( textPath );
-// 		}
-
-// 		if ( videoFile.is_open() )
-// 			videoFile.write( (char *)item.mem, item.bytes_used );
-
-// 		if ( textFile.is_open() )
-// 			textFile << dateTime << std::setw(7) << item.bytes_used << std::endl;
-
-// 		v4l2_buffer buf = {};
-// 		v4l2_plane planes[VIDEO_MAX_PLANES] = {};
-// 		buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-// 		buf.memory = V4L2_MEMORY_MMAP;
-// 		buf.index = item.index;
-// 		buf.length = 1;
-// 		buf.m.planes = planes;
-// 		buf.m.planes[0].bytesused = 0;
-// 		buf.m.planes[0].length = item.length;
-// 		if (xioctl(encoder_fd, VIDIOC_QBUF, &buf) < 0)
-// 			throw std::runtime_error("failed to re-queue encoded buffer");
-// 	}
-
-// 	delete[] storage;
-// }
-
 void SentinelCamera::checkThread()
 {
 	abortCheckThread = false;
@@ -1913,7 +1346,6 @@ void SentinelCamera::checkThread()
 	string base;
 	string videoPath;
 	string textPath;
-	string tempPath;
 
 	std::ofstream videoFile;
 	std::ofstream textFile;
@@ -1931,7 +1363,6 @@ void SentinelCamera::checkThread()
 
 		videoPath = base + ".h264";
 		textPath =  base + ".txt";
-		tempPath =  base + ".tmp";
 
 		videoFile.open( videoPath, std::ios::binary );
 		if ( !videoFile.is_open() )
@@ -1979,6 +1410,7 @@ void SentinelCamera::checkThread()
 	auto terminateTrigger = [&,this](){
 		triggered = false;
 		untriggered = false;
+		std::ostringstream oss;
 
 		rateLimitBank = std::max(0,rateLimitBank-FRAMES_PER_HOUR/max_events_per_hour);
 
@@ -1988,7 +1420,13 @@ void SentinelCamera::checkThread()
 		if ( videoFile.is_open() )
 		{
 			videoFile.close();
-			rename(videoPath.c_str(), tempPath.c_str() );
+			int iFrameRate = round(frameRate);
+
+			// Make .mp4 file from .h264 file
+			oss << "MP4Box -add " << videoPath 
+			    << " -fps " << iFrameRate 
+				<< " -quiet -new " << base << ".mp4";
+			system( oss.str().c_str() );
 		}
 		if ( textFile.is_open() )
 			textFile.close();
@@ -2078,315 +1516,6 @@ void SentinelCamera::checkThread()
 			syncTime(); 
 	}
 }
-
-// void SentinelCamera::checkThread()
-// {
-// 	abortCheckThread = false;
-// 	int previous = 0;
-
-// 	double sumAverage = 0.0;
-
-// 	referenceFrame = new unsigned char[CHECK_FRAME_SIZE];
-// 	maskFrame      = new unsigned char[CHECK_FRAME_SIZE];
-
-// 	memset(referenceFrame, 0xff, CHECK_FRAME_SIZE);
-// 	memset(maskFrame, noise_level, CHECK_FRAME_SIZE);
-
-// 	int64_t frameTime = 0;
-
-// 	const int FRAMES_PER_HOUR = 60 * 60 * 30;
-
-// 	bool triggered = false;
-// 	bool untriggered = false;
-// 	int eventDuration = 0;
-// 	int frameCount = 0;
-// 	int triggerCount = 0;
-// 	int untriggerCount = 0;
-// 	int rateLimitBank = FRAMES_PER_HOUR; // One hour worth of frames
-// 	bool force = false;
-
-// 	auto initiateTrigger = [&](){
-// 		triggered = true;
-// 		untriggered = false;
-// 		eventDuration = 0;
-// 		force = false;
-
-// 		event_mutex.lock();
-// 		eventQueue.push( frameTime );
-// 		event_mutex.unlock();
-
-// 		std::cerr << "Initiate trigger at: " << dateTimeString(frameTime) << std::endl;
-// 	};
-
-// 	auto terminateTrigger = [&,this](){
-// 		triggered = false;
-// 		untriggered = false;
-
-// 		event_mutex.lock();
-// 		eventQueue.push( frameTime );
-// 		event_mutex.unlock();
-
-// 		// Temporarily de-sensitize
-// 		memset(referenceFrame, 0xff, CHECK_FRAME_SIZE);
-
-// 		rateLimitBank = std::max(0,rateLimitBank-FRAMES_PER_HOUR/max_events_per_hour);
-
-// 		std::cerr << "Terminate trigger at:" << dateTimeString(frameTime) << std::endl;
-// 	};
-
-// 	readMask();
-
-// 	for (;;)
-// 	{
-// 		++frameCount;
-// 		rateLimitBank = std::min(rateLimitBank+1,FRAMES_PER_HOUR);
-
-// 		{
-// 			std::unique_lock<std::mutex> locker(check_mutex);
-// 			checkCondition.wait_for( locker, 200ms, [this]() {
-// 				return (checkBufferHead != checkBufferTail) || abortCheckThread;
-// 			});
-
-// 			if ( abortCheckThread )
-// 				break;
-
-// 			if ( checkBufferHead == checkBufferTail )
-// 				continue;
-
-// 			previous = checkBufferTail;
-// 			checkBufferTail = (checkBufferTail+1) % NUM_CHECK_BUFFERS;
-
-// 			if ( force_event )
-// 			{
-// 				force = true;
-// 				force_event = false;
-// 			}
-// 		}
-
-// 		CheckBufferDescription& desc = checkBuffers[previous];
-// 		frameTime = desc.timestamp_us;
-// 		unsigned char* p = desc.mem;
-// 		unsigned char* pend = p + CHECK_FRAME_SIZE;
-
-// 		unsigned char* pRef = referenceFrame;
-// 		unsigned char* pMask = maskFrame;
-
-// 		int sum = 0;
-
-// 		while ( p < pend )
-// 		{
-// 			int c = *p++;
-
-// 			int test = c - *pRef - *pMask++;
-// 			if ( test > 0 )
-// 				sum += test;
-
-// 			c *= 15;
-// 			c += test;
-// 			c >>= 4;
-
-// 			*pRef++ = c;			
-// 		}
-
-// 		//
-// 		// Measure the filtered average amplitude of an arbitrary collection of pixels near the zenith.
-// 		// This is used to determine if we are looking at a daylight sky where auto-exposure may be the preferred mode.
-// 		//
-// 	    int zsum = 0;
-// 		p = desc.mem;
-
-//     	for ( int row = 170; row <= 190; row += 10)
-//     	{
-//         	for ( int col = 310; col <= 330; col += 10 )
-//             	zsum += p[640*row + col];
-//     	}
-
-//     	double average = zsum / 9.0;
-
-// 		zenith_mutex.lock();
-//     	zenithAmplitude = 0.99 * zenithAmplitude + 0.01 * average;
-// 		zenith_mutex.unlock();
-
-// 		sumAverage = 0.99*sumAverage + 0.01*sum;
-// 		if ( (frameCount % 150) == 0 )
-// 			std::cerr << sumAverage << " " << zenithAmplitude << std::endl << std::flush;
-
-// 		if ( !triggered )
-// 		{
-// 			bool tooMany = max_events_per_hour * rateLimitBank / FRAMES_PER_HOUR == 0;
-
-// 			if ( force || frameCount == force_count )
-// 				initiateTrigger();
-// 			else if ( sum >= sumThreshold && !tooMany )
-// 			{
-// 				++triggerCount;
-// 				if ( triggerCount >= 2 )
-// 					initiateTrigger();
-// 			}
-// 			else
-// 				triggerCount = 0;
-// 		}
-// 		else if ( triggered && !untriggered )
-// 		{
-// 			++eventDuration;
-
-// 			if ( sum < sumThreshold )
-// 			{
-// 				++untriggerCount;
-// 				if ( untriggerCount >= 2 )
-// 					untriggered = true;
-// 			}
-// 			else
-// 			{
-// 				untriggerCount = 0;
-// 				if ( eventDuration > 300 )
-// 					terminateTrigger();
-// 			}
-// 		}
-// 		else
-// 		{
-// 			++eventDuration;
-
-// 			if ( sum < sumThreshold )
-// 				++untriggerCount;
-
-// 			if ( eventDuration > 60 && untriggerCount >= 15 )
-// 				terminateTrigger();
-// 			else if ( eventDuration > 300 )
-// 				terminateTrigger();
-// 		}
-
-// 		eventCondition.notify_one();
-// 	}
-
-// 	delete[] referenceFrame;
-// 	delete[] maskFrame;
-// }
-
-// void SentinelCamera::eventThread()
-// {
-// 	abortEventThread = false;
-// 	int64_t scan_time = 0;
-// 	int64_t end_time = 0;
-// 	bool keyframe_found = false;
-
-// 	std::filesystem::path videoPath;
-// 	std::filesystem::path textPath;
-// 	std::filesystem::path tempPath;
-
-// 	std::ofstream videoFile;
-// 	std::ofstream textFile;
-
-// 	int frame_count = 0;
-
-// 	for (;;)
-// 	{
-// 		int64_t tempTime = 0;
-
-// 		{
-// 			std::unique_lock<std::mutex> locker(event_mutex);
-// 			eventCondition.wait_for( locker, 100ms );
-
-// 			if ( abortEventThread )
-// 				break;
-
-// 			if ( end_time == 0 && !eventQueue.empty() )
-// 			{
-// 				tempTime = eventQueue.front();
-// 				eventQueue.pop();
-// 			}
-// 		}
-
-// 		if ( scan_time == 0 && tempTime == 0 )
-// 			continue;
-
-// 		if ( scan_time == 0 && tempTime != 0 )
-// 		{
-// 			// Open file
-// 			string timeString = dateTimeString( tempTime );
-// 			videoPath = "new/s";
-// 			videoPath.concat( timeString );
-// 			videoPath.concat( ".h264" );
-// 			textPath = videoPath;
-// 			textPath.replace_extension( ".txt" );
-// 			tempPath = videoPath;
-// 			tempPath.replace_extension( ".tmp");
-
-// 			videoFile.open( videoPath, std::ios::binary );
-// 			if ( !videoFile.is_open() )
-// 				std::cerr << "Could not open: " << videoPath << std::endl;
-			
-// 			textFile.open( textPath );
-// 			if ( !textFile.is_open() )
-// 				std::cerr << "Could not open: " << textPath << std::endl;
-
-// 			scan_time = tempTime - 2000000;
-// 			frame_count = 0;
-// 		}
-// 		else if ( scan_time != 0 && tempTime != 0 )
-// 			end_time = tempTime;
-
-// 		if ( scan_time != 0 && end_time != 0 && scan_time > end_time )
-// 		{
-// 			// Close files
-// 			if ( videoFile.is_open() )
-// 			{
-// 				videoFile.close();
-// 				rename(videoPath.c_str(), tempPath.c_str() );
-// 			}
-// 			if ( textFile.is_open() )
-// 				textFile.close();
-// 			scan_time = 0;
-// 			end_time = 0;
-// 			keyframe_found = false;
-// 		}
-
-// 		StorageDescription sd;
-// 		sd.offset = 0;
-// 		sd.size = 0;
-// 		int64_t storageTime = 0;
-// 		map<int64_t,StorageDescription>::const_iterator scan;
-
-// 		if ( scan_time != 0 )
-// 		{
-// 			storage_mutex.lock();
-// 			scan = storageMap.upper_bound( scan_time );
-// 			if ( scan != storageMap.end() )
-// 			{
-// 				storageTime = scan->first;
-// 				sd = scan->second;
-// 			}
-// 			storage_mutex.unlock();
-// 		}
-
-// 		if ( storageTime != 0 )
-// 		{
-// 			keyframe_found = keyframe_found || sd.key_frame;
-
-// 			if ( keyframe_found && videoFile.is_open() && textFile.is_open() )
-// 			{
-// 				int64_t remainder = STORAGE_SIZE - sd.offset;
-// 				char* ps = (char *)storage;
-// 				if ( sd.size <= remainder )
-// 					videoFile.write( ps+sd.offset, sd.size );
-// 				else
-// 				{
-// 					videoFile.write( ps+sd.offset, remainder );
-// 					videoFile.write( ps, sd.size-remainder );
-// 				}
-
-// 				string dateTime = dateTimeString( storageTime );
-// 				textFile << std::setw(4) << ++frame_count 
-// 				         << " " << dateTime 
-// 						 << std::setw(7) << sd.size << std::endl;
-
-// 				// std::cerr << frame_count << std::endl;
-// 			}
-
-// 			scan_time = storageTime+1;
-// 		}
-// 	}
-// }
 
 void SentinelCamera::readCalibrationParameters()
 {
@@ -2862,6 +1991,17 @@ string executeCommand( SentinelCamera& sentinelCamera, std::istringstream& iss )
 		if ( iss >> max_events )
 		{
 			sentinelCamera.max_events_per_hour = max_events;
+			oss << "OK";
+		}
+		else
+			oss << "No";
+	}
+	else if ( cmd == "set_gps_time_offset" )
+	{
+		double t_offset;
+		if ( iss >> t_offset )
+		{
+			sentinelCamera.gpsTimeOffset = t_offset;
 			oss << "OK";
 		}
 		else

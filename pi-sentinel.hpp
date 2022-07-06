@@ -19,7 +19,6 @@
 
 #include <linux/videodev2.h>
 
-// using namespace libcamera;
 using std::mutex;
 using std::condition_variable;
 using std::vector;
@@ -35,13 +34,6 @@ struct BufferDescription
 	size_t size;
 };
 
-// struct StorageDescription
-// {
-//     unsigned int offset;
-//     unsigned int size;
-//     bool key_frame;
-// };
-
 struct StorageMeta
 {
     unsigned int offset;
@@ -50,22 +42,6 @@ struct StorageMeta
     int signalAmplitude;
     bool key_frame;
 };
-
-// struct CheckBufferDescription
-// {
-//     unsigned char* mem;
-//     int64_t timestamp_us;
-// };
-
-// struct OutputItem
-// {
-// 	void *mem;
-// 	size_t bytes_used;
-// 	size_t length;
-// 	unsigned int index;
-// 	bool keyframe;
-// 	int64_t timestamp_us;
-// };
 
 struct MappedBuffer 
 {
@@ -83,55 +59,29 @@ class SentinelCamera
 {
 private:
 
-    // CameraManager* cm;
-    // std::shared_ptr<Camera> camera;
-    // std::unique_ptr<CameraConfiguration> config;
-    // FrameBufferAllocator *allocator;
-    // int id;
     int encoder_fd;
     int decoder_fd;
     int device_fd;
     unsigned int n_buffers;
 
-    // deque<Request*> completedRequests;
-    // mutex requestMutex;
-    // condition_variable requestCondition;
-    // bool abortRequestThread;
     bool abortDeviceThread;
     bool abortCheckThread;
-    // bool abortEventThread;
     bool abortDecoderThread;
-    // bool abortPoll;
-    // bool abortOutput;
     bool abortArchiveThread;
 
-	// vector<std::unique_ptr<Request>> requests;
-    // thread request_thread;
-    // thread poll_thread;
-    // thread output_thread;
     thread check_thread;
-    // thread event_thread;
     thread device_thread;
     thread decoder_thread;
     thread archive_thread;
 
-    // mutex input_buffers_available_mutex;
     queue<int> input_buffers_available;
-
-    // queue<OutputItem> output_queue;
-    // mutex output_mutex;
-
-    // condition_variable output_cond_var;
 
     static constexpr int NUM_DEVICE_BUFFERS = 4;
     static constexpr int NUM_OUTPUT_BUFFERS = 6;
     static constexpr int NUM_CAPTURE_BUFFERS = 12;
-    // static constexpr int NUM_CHECK_BUFFERS = 6;
     static constexpr int CHECK_FRAME_SIZE = 640 * 360;
     static constexpr int STORAGE_SIZE = 1024 << 13;
     static constexpr int NUM_STORAGE_META = 150;
-
-    // static vector<SentinelCamera*> cameraVector;
 
     BufferDescription buffers[NUM_CAPTURE_BUFFERS];
     BufferDescription deviceBuffers[NUM_DEVICE_BUFFERS];
@@ -143,25 +93,13 @@ private:
     mutex meta_write_mutex;
     mutex meta_check_mutex;
 
-    // map<int,void*> mappedBuffers;
-
-    // CheckBufferDescription checkBuffers[NUM_CHECK_BUFFERS];
-    // int checkBufferHead;
-    // int checkBufferTail;
-    // mutex check_mutex;
     condition_variable checkCondition;
     bool force_event;
 
     mutex time_offset_mutex;
     struct timespec time_offset;
 
-    // mutex storage_mutex;
     unsigned char* storage;
-    // map<int64_t,StorageDescription> storageMap;
-
-    // mutex event_mutex;
-    // condition_variable eventCondition;
-    // queue<int64_t> eventQueue;
 
     condition_variable decoder_cond_var;
     condition_variable archive_cond_var;
@@ -176,12 +114,8 @@ public:
     SentinelCamera();
     ~SentinelCamera();
 
-    // void requestThread();
-    // void pollThread();
-    // void outputThread();
     void measureFrameRate(unsigned microseconds);
     void checkThread();
-    // void eventThread();
     void archiveThread();
     void startDeviceCapture();
     void stopDeviceCapture();
@@ -197,11 +131,8 @@ public:
     int xioctl(int fd, int ctl, void *arg);
     void createEncoder();
     void createDecoder();
-    // void encodeBuffer(int fd, size_t size, int64_t timestamp_us);
-    // void fillCheckBuffer( int fd, int64_t timestamp_us );
     void syncTime();
     void processDecoded( string videoFilePath, ProcessType process );
-    // void runDecoder( string videoFilePath, ProcessType process );
     void stopDecoder();
     void encodeJPEG(void * mem, const string& fileName );
     void readCalibrationParameters();
@@ -220,12 +151,8 @@ public:
 
     bool isIDR(const unsigned char *p, int size);
 
-
     std::vector<std::unique_ptr<MappedBuffer>> map_decoder_buffers(v4l2_buf_type const type);
-    // string secondsString( int64_t timestamp_us );
     string dateTimeString( int64_t timestamp_us );
-
-    // static void requestComplete(Request* request);
 
     bool running;
     int noise_level;
@@ -239,6 +166,7 @@ public:
     mutex zenith_mutex;
     double averageZenithAmplitude;
     double frameRate;
+    double gpsTimeOffset;
 	
     int sumThreshold;
 };

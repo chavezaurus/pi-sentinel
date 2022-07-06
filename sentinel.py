@@ -181,6 +181,24 @@ class SentinelServer(object):
         else:
             print("Toggle Start/Stop failed")
 
+    def checkExposure(self):
+        response = self.funnelCmd("get_running")
+        if response["response"] != "Yes":
+            return
+
+        response = self.funnelCmd("get_frame_rate")
+        if float(response["response"]) < 17.0:
+            print("Fixed exposure at: ", strftime("%Y-%m-%d %H:%M:%S", localtime()))
+            run(['v4l2-ctl', '-d', self.devName, '-c', 'exposure_auto=1'])
+            run(['v4l2-ctl', '-d', self.devName, '-c', 'exposure_absolute=333'])
+            run(['v4l2-ctl', '-d', self.devName, '-c', 'gain=0'])
+            return
+
+        response = self.funnelCmd("get_zenith_amplitude")
+        if float(response["response"]) > 230.0:
+            print("Auto exposure at: ", strftime("%Y-%m-%d %H:%M:%S", localtime()))
+            run(['v4l2-ctl', '-d', self.devName, '-c', 'exposure_auto=3'])
+
     def handleSentinelCommand(self,obj):
         cmd = obj['cmd']+"\n"
         queue = obj['queue']
@@ -217,17 +235,6 @@ class SentinelServer(object):
             if len(lst) >= 2:
                 rmtree(os.path.join(self.archivePath,lst[0]))
 
-    def buildMp4File(self):
-        lst = glob.glob("new/*.tmp")
-        for tempPath in lst:
-            pre, ext = os.path.splitext(tempPath)
-            videoPath = pre + ".h264"
-            mp4Path = pre + ".mp4"
-            os.rename(tempPath, videoPath)
-            # cmd =  "MP4Box -add %s -fps 30 -quiet -new %s" % (videoPath,mp4Path)
-            pid = Popen(["MP4Box", "-add", videoPath, "-fps", "30", "-quiet", "-new", mp4Path]).pid
-            print(mp4Path)
-
     def backgroundProcess(self):
         #Wait for engine to start up
         while cherrypy.engine.state != cherrypy.engine.states.STARTED:
@@ -250,11 +257,11 @@ class SentinelServer(object):
                     self.runStartSequence()
                 elif tnow == self.stopTime and self.startTime != self.stopTime:
                     self.runStopSequence()
+                else:
+                    self.checkExposure()
 
                 if self.archivePath != "none":
                     self.pruneArchive()
-
-            self.buildMp4File()
 
             lastTime = tnow
             time.sleep(10)
@@ -281,6 +288,7 @@ class SentinelServer(object):
         while cherrypy.engine.state == cherrypy.engine.states.STARTED:
             line = self.gpsProcess.stdout.readline()
             if not line:
+                time.sleep(1.0)
                 continue
 
             items = line.split()
@@ -310,9 +318,9 @@ class SentinelServer(object):
         comm = Thread(target = self.commProcess)
         comm.daemon = True
         comm.start()
-        # gps = Thread(target = self.GPS_Process)
-        # gps.daemon = True
-        # gps.start()
+        gps = Thread(target = self.GPS_Process)
+        gps.daemon = True
+        gps.start()
 
     def testThread(self):
         for i in range(10):
@@ -622,13 +630,13 @@ class SentinelServer(object):
 
         l = []
 
-        while tm < tp:
+        while tm < tp+60:
             dtt = datetime.datetime.utcfromtimestamp(tm)
             path0 = self.archivePath + "/s" + dtt.strftime("%Y%m%d_%H") 
             path0 += "/s" + dtt.strftime("%Y%m%d_%H%M") + ".h264"
             if path0 not in l and os.path.exists(path0) and os.path.exists(path0.replace(".h264",".txt")):
                 l.append(path0)
-            tm = tm + 1
+            tm = tm + 60
 
         if len(l) == 0:
             return { "response": "Archive file not found"}
