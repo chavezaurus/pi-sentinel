@@ -108,6 +108,7 @@ SentinelCamera::SentinelCamera()
 	frameRate = 30.0;
 	gpsTimeOffset = 0.0;
 	force_event = false;
+	dev_name = "/dev/video2";
 
 	syncTime();
 }
@@ -203,19 +204,13 @@ void SentinelCamera::initDevice()
     if (-1 == xioctl(device_fd, VIDIOC_G_FMT, &fmt))
 		throw std::runtime_error("Error with VIDIOC_G_FMT");
 
-	if ( fmt.fmt.pix.width != 1920 ||
-	     fmt.fmt.pix.height != 1080 ||
-		 fmt.fmt.pix.pixelformat != V4L2_PIX_FMT_H264 ||
-		 fmt.fmt.pix.field != V4L2_FIELD_NONE )
-	{
-    	fmt.fmt.pix.width = 1920;
-    	fmt.fmt.pix.height = 1080;
-    	fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_H264;
-    	fmt.fmt.pix.field = V4L2_FIELD_NONE;
+    fmt.fmt.pix.width = 1920;
+    fmt.fmt.pix.height = 1080;
+    fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_H264;
+    fmt.fmt.pix.field = V4L2_FIELD_NONE;
 
-    	if (-1 == xioctl(device_fd, VIDIOC_S_FMT, &fmt))
-			throw std::runtime_error("Error with VIDIOC_S_FMT");
-	}
+    if (-1 == xioctl(device_fd, VIDIOC_S_FMT, &fmt))
+		throw std::runtime_error("Error with VIDIOC_S_FMT");
 
     CLEAR(req);
 
@@ -554,7 +549,7 @@ void SentinelCamera::measureFrameRate(unsigned microseconds)
 
 void SentinelCamera::deviceCaptureThread()
 {
-	openDevice("/dev/video2");
+	openDevice(dev_name);
 	initDevice();
 	startDeviceCapture();
 
@@ -1618,6 +1613,32 @@ void SentinelCamera::calibrationFunction()
     calibrationParameters["elev"] = elev;
 }
 
+void SentinelCamera::overlayMask( unsigned char* frame )
+{
+	maskFrame = new unsigned char[CHECK_FRAME_SIZE];
+    readMask();
+
+    for (int iy = 0; iy < 1080; ++iy)
+    {
+        for (int ix = 0; ix < 1920; ++ix)
+        {
+            // int indexY = 1920 * iy + ix;
+            int indexU = 1920 * 1088 + 960 * (iy / 2) + (ix / 2);
+            int indexV = indexU + 1920 * 1088 / 4;
+
+            int indexMask = 640*(iy/3) + ix/3;
+
+            if ( maskFrame[indexMask] == 255 )
+            {
+                frame[indexU] = 116;
+                frame[indexV] = 140;
+            }
+        }
+    }
+
+	delete [] maskFrame;
+}
+
 void SentinelCamera::makeComposite( string filePath )
 {
 	unsigned char* composeBuffer = new unsigned char[1920*1088*3/2];
@@ -1654,6 +1675,12 @@ void SentinelCamera::makeComposite( string filePath )
 	p.replace(p.find(".h264"),5,".jpg");
 
 	encodeJPEG( composeBuffer, p );
+	std::cerr << p << std::endl;
+
+	overlayMask(composeBuffer);
+	p.replace(p.find(".jpg"),4,"m.jpg" );
+	encodeJPEG( composeBuffer, p );
+	std::cerr << p << std::endl;
 
 	delete [] composeBuffer;
 }
@@ -1881,6 +1908,8 @@ string executeCommand( SentinelCamera& sentinelCamera, std::istringstream& iss )
 		oss << sentinelCamera.max_events_per_hour;
 	else if ( cmd == "get_archive_path" )
 		oss << (sentinelCamera.archivePath.empty() ? "none" : sentinelCamera.archivePath );
+	else if ( cmd == "get_dev_name" )
+		oss << sentinelCamera.dev_name;
 	else if ( cmd == "start" )
 	{
 		if ( sentinelCamera.running )
@@ -1980,6 +2009,17 @@ string executeCommand( SentinelCamera& sentinelCamera, std::istringstream& iss )
 				sentinelCamera.archivePath = "";
 			else
 				sentinelCamera.archivePath = path;
+			oss << "OK";
+		}
+		else
+			oss << "No";
+	}
+	else if ( cmd == "set_dev_name" )
+	{
+		string name;
+		if ( (iss >> name) )
+		{
+			sentinelCamera.dev_name = name;
 			oss << "OK";
 		}
 		else

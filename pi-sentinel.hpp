@@ -138,6 +138,7 @@ public:
     void readCalibrationParameters();
     void calibrationFunction();
     void readMask();
+    void overlayMask( unsigned char* frame );
     void makeComposite( string filePath );
     void makeAnalysis( string filePath );
     void makeStarChart( string filePath );
@@ -162,6 +163,7 @@ public:
     int max_events_per_hour;
     int force_count;
     string archivePath;
+    string dev_name;
 
     mutex zenith_mutex;
     double averageZenithAmplitude;

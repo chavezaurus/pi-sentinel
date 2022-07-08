@@ -140,6 +140,7 @@ class SentinelServer(object):
         self.startTime = "21:30"
         self.stopTime  = "05:00"
         self.archivePath = "none"
+        self.devName = "/dev/video2"
         self.maxPercentUsage = 90.0
         self.gps_latitude = 0.0
         self.gps_longitude = 0.0
@@ -167,6 +168,8 @@ class SentinelServer(object):
         if response["response"] == "No":
             return
             
+        print("Auto exposure at: ", strftime("%Y-%m-%d %H:%M:%S", localtime()))
+        run(['v4l2-ctl', '-d', self.devName, '-c', 'exposure_auto=3'])
         response = self.funnelCmd("stop")
         if response["response"] != "OK":
             print("Stop failed")
@@ -451,6 +454,8 @@ class SentinelServer(object):
             response["eventsPerHour"] = int(r["response"])
             r = self.funnelCmd("get_running")
             response["running"] = r["response"]
+            r = self.funnelCmd("get_dev_name")
+            response["devName"] = r["response"]
             r = self.funnelCmd("get_archive_path")
             response["archivePath"] = r["response"]
             response["startTime"] = {"h": int(self.startTime[0:2]), "m": int(self.startTime[3:5])}
@@ -461,6 +466,7 @@ class SentinelServer(object):
             response["gpsLatitude"] = self.gps_latitude
             response["gpsLongitude"] = self.gps_longitude
             response["gpsTimeOffset"] = self.gps_time_offset
+            self.devName = response["devName"]
         except Exception as inst:
             print(inst)
             return {}
@@ -477,6 +483,9 @@ class SentinelServer(object):
         r = self.funnelCmd("set_max_events_per_hour %d" % data["eventsPerHour"])
         if r["response"] != "OK":
             return r
+        r = self.funnelCmd("set_dev_name %s" % data["devName"])
+        if r["response"] != "OK":
+            return r
         r = self.funnelCmd("set_archive_path %s" % data["archivePath"])
         if r["response"] != "OK":
             return r
@@ -484,6 +493,7 @@ class SentinelServer(object):
         stop = data["stopTime"]
         self.startTime = "%02d:%02d" % (start["h"],start["m"])
         self.stopTime  = "%02d:%02d" % (stop["h"], stop["m"])
+        self.devName = data["devName"]
         self.archivePath = data["archivePath"]
 
     @cherrypy.expose

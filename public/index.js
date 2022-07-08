@@ -20,6 +20,7 @@ var sentinelState = {
     frameRate: 30.0,
     zenithAmplitude: 0.0,
     running: "No",
+    devName: "/dev/video2",
     archivePath: "none",
     numNew: 0,
     numSaved: 0,
@@ -716,11 +717,11 @@ let SkyTable = {
 
 let SubmitControls = function() {
     if ( sentinelState.archivePath === "" ) {
-        sentinelState.archivePath = "/dev/video2";
+        sentinelState.archivePath = "none";
     }
 
     if ( sentinelState.devName === "" ) {
-        sentinelState.devName = "none";
+        sentinelState.devName = "/dev/video2";
     }
 
     m.request({
@@ -899,6 +900,9 @@ let ControlPane = {
 
             m("label.citem-left", "Max Events Per Hour:"),
             m("input.input[type=number]",{oninput:function(e){sentinelState.eventsPerHour=Number(e.target.value)},value: sentinelState.eventsPerHour}),
+
+            m("label.citem-left", "Camera Device:"),
+            m("input.input[type=text]",{oninput:function(e){sentinelState.devName=e.target.value},value: sentinelState.devName}),
 
             m("label.citem-left", "Archive Path:"),
             m("input.input[type=text]",{oninput:function(e){sentinelState.archivePath=e.target.value},value: sentinelState.archivePath}),
