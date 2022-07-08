@@ -856,7 +856,7 @@ void SentinelCamera::readMask()
 			int g = lpData[3*i+1];
 			int b = lpData[3*i+2];
 
-        	if (r > 250 && g < 10 && b < 10)
+        	if (r > 240 && g < 20 && b < 20)
 			{
             	maskFrame[i] = 255;
 				// std::cerr << "i: " << i << " r: " << r << " g: " << g << " b: " << b << std::endl;
