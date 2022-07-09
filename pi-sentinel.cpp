@@ -856,7 +856,7 @@ void SentinelCamera::readMask()
 			int g = lpData[3*i+1];
 			int b = lpData[3*i+2];
 
-        	if (r > 240 && g < 20 && b < 20)
+        	if (r > 230 && g < 20 && b < 20)
 			{
             	maskFrame[i] = 255;
 				// std::cerr << "i: " << i << " r: " << r << " g: " << g << " b: " << b << std::endl;
@@ -1622,7 +1622,7 @@ void SentinelCamera::overlayMask( unsigned char* frame )
     {
         for (int ix = 0; ix < 1920; ++ix)
         {
-            // int indexY = 1920 * iy + ix;
+            int indexY = 1920 * iy + ix;
             int indexU = 1920 * 1088 + 960 * (iy / 2) + (ix / 2);
             int indexV = indexU + 1920 * 1088 / 4;
 
@@ -1630,6 +1630,7 @@ void SentinelCamera::overlayMask( unsigned char* frame )
 
             if ( maskFrame[indexMask] == 255 )
             {
+				frame[indexY] = std::min(frame[indexY]+10,254);
                 frame[indexU] = 116;
                 frame[indexV] = 140;
             }
