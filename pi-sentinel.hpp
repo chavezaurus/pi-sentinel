@@ -59,8 +59,6 @@ class SentinelCamera
 {
 private:
 
-    int encoder_fd;
-    int decoder_fd;
     int device_fd;
     unsigned int n_buffers;
 
@@ -129,11 +127,11 @@ public:
     void completeShutdown();
     void stop();
     int xioctl(int fd, int ctl, void *arg);
-    void createEncoder();
-    void createDecoder();
+    void createEncoder( int& encoder_fd);
+    void createDecoder( int& decoder_fd);
     void syncTime();
     void processDecoded( string videoFilePath, ProcessType process );
-    void stopDecoder();
+    void stopDecoder( int& decoder_fd );
     void encodeJPEG(void * mem, const string& fileName );
     void readCalibrationParameters();
     void calibrationFunction();
@@ -152,7 +150,7 @@ public:
 
     bool isIDR(const unsigned char *p, int size);
 
-    std::vector<std::unique_ptr<MappedBuffer>> map_decoder_buffers(v4l2_buf_type const type);
+    std::vector<std::unique_ptr<MappedBuffer>> map_decoder_buffers(int decoder_fd, v4l2_buf_type const type);
     string dateTimeString( int64_t timestamp_us );
 
     bool running;

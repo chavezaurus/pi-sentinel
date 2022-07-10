@@ -286,8 +286,8 @@ let Dropdown = {
             m(c, [
                 m("a.dropdown-item", {href: "#", onclick: ToggleStartStop }, "Toggle Start/Stop"),
                 m(forceClass, {href: "#", onclick: ForceTrigger }, "Force Trigger"),
-                m(compoClass, {href: "#", onclick: MakeComposite }, "Make Composite"),
-                m(compoClass, {href: "#", onclick: Analyze }, "Analyze"),
+                m("a.dropdown-item", {href: "#", onclick: MakeComposite }, "Make Composite"),
+                m("a.dropdown-item", {href: "#", onclick: Analyze }, "Analyze"),
                 m(compoClass, {href: "#", onclick: MakeAverage }, "Make Star Map"),
                 m("a.dropdown-item", vidObj, "Get Video"),
                 m("a.dropdown-item", jpgObj, "Get Image"),

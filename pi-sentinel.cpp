@@ -376,7 +376,8 @@ double SentinelCamera::zenithAmplitude( unsigned char* pstart )
 
 void SentinelCamera::decoderThread()
 {
-	createDecoder();
+	int decoder_fd;
+	createDecoder( decoder_fd );
 
 	abortDecoderThread = false;
 	int decoderIndex = 0;
@@ -391,8 +392,8 @@ void SentinelCamera::decoderThread()
 
     auto const coded_buf_type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
     auto const decoded_buf_type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-    auto const coded_buffers = map_decoder_buffers(coded_buf_type);
-    auto const decoded_buffers = map_decoder_buffers(decoded_buf_type);
+    auto const coded_buffers = map_decoder_buffers(decoder_fd, coded_buf_type);
+    auto const decoded_buffers = map_decoder_buffers(decoder_fd, decoded_buf_type);
 
     std::vector<MappedBuffer*> coded_free, decoded_free;
     for (auto const &b : coded_buffers) 
@@ -519,7 +520,7 @@ void SentinelCamera::decoderThread()
 			throw std::runtime_error( "error receiving decoded buffers" );
 	}
 
-	stopDecoder();
+	stopDecoder( decoder_fd );
 
 	delete [] referenceFrame;
 	delete [] maskFrame;
@@ -718,7 +719,7 @@ int SentinelCamera::xioctl(int fd, int ctl, void *arg)
 	return ret;
 }
 
-void SentinelCamera::createDecoder()
+void SentinelCamera::createDecoder( int& decoder_fd )
 {
 	const char device_name[] = "/dev/video10";
 	const int frameWidth = 1920;
@@ -763,7 +764,7 @@ void SentinelCamera::createDecoder()
 		throw std::runtime_error("error starting decoded stream");
 }
 
-std::vector<std::unique_ptr<MappedBuffer>> SentinelCamera::map_decoder_buffers(v4l2_buf_type const type) 
+std::vector<std::unique_ptr<MappedBuffer>> SentinelCamera::map_decoder_buffers(int decoder_fd, v4l2_buf_type const type) 
 {
     std::vector<std::unique_ptr<MappedBuffer>> buffers;
 
@@ -888,12 +889,13 @@ void SentinelCamera::processDecoded( string videoFilePath, ProcessType process )
 	if ( !textFile.is_open() )
 		return;
 
-	createDecoder();
+	int decoder_fd;
+	createDecoder( decoder_fd );
 
     auto const coded_buf_type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
     auto const decoded_buf_type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-    auto const coded_buffers = map_decoder_buffers(coded_buf_type);
-    auto const decoded_buffers = map_decoder_buffers(decoded_buf_type);
+    auto const coded_buffers = map_decoder_buffers(decoder_fd, coded_buf_type);
+    auto const decoded_buffers = map_decoder_buffers(decoder_fd, decoded_buf_type);
 
     std::vector<MappedBuffer*> coded_free, decoded_free;
     for (auto const &b : coded_buffers) 
@@ -1006,10 +1008,10 @@ void SentinelCamera::processDecoded( string videoFilePath, ProcessType process )
 	if ( textFile.is_open() )
 		textFile.close();
 
-	stopDecoder();
+	stopDecoder( decoder_fd );
 }
 
-void SentinelCamera::stopDecoder() 
+void SentinelCamera::stopDecoder( int& decoder_fd ) 
 {
     int coded_type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
     if (v4l2_ioctl(decoder_fd, VIDIOC_STREAMOFF, &coded_type)) 
@@ -1099,7 +1101,7 @@ void SentinelCamera::encodeJPEG( void* mem, const string& fileName )
 	jpeg_destroy_compress(&cinfo);
 }
 
-void SentinelCamera::createEncoder()
+void SentinelCamera::createEncoder(int& encoder_fd)
 {
 	// First open the encoder device. Maybe we should double-check its "caps".
 
@@ -1812,6 +1814,8 @@ void SentinelCamera::makeAnalysis( string filePath )
 		out << std::setw(10) << py << ",";
 		out << std::setw(10) << azim << "," << std::setw(10) << elev << std::endl;
 	}
+
+	std::cerr << txtPath << std::endl;
 }
 
 void SentinelCamera::makeStarChart( string filePath )
@@ -1943,7 +1947,7 @@ string executeCommand( SentinelCamera& sentinelCamera, std::istringstream& iss )
 	}
 	else if ( cmd == "compose" )
 	{
-		std::cout << (sentinelCamera.running ? "=No" : "=OK") << std::endl;
+		// std::cout << (sentinelCamera.running ? "=No" : "=OK") << std::endl;
 		string path;
 		if ( iss >> path )
 		{
@@ -1956,7 +1960,7 @@ string executeCommand( SentinelCamera& sentinelCamera, std::istringstream& iss )
 	}
 	else if ( cmd == "analyze" )
 	{
-		std::cout << (sentinelCamera.running ? "=No" : "=OK") << std::endl;
+		// std::cout << (sentinelCamera.running ? "=No" : "=OK") << std::endl;
 		string path;
 		if ( iss >> path )
 		{
