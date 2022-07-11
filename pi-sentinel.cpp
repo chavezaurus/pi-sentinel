@@ -388,7 +388,7 @@ void SentinelCamera::decoderThread()
 	memset(referenceFrame, 0xff, CHECK_FRAME_SIZE);
 	memset(maskFrame, noise_level, CHECK_FRAME_SIZE);
 
-	readMask();
+	readMask( maskFrame );
 
     auto const coded_buf_type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
     auto const decoded_buf_type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
@@ -680,6 +680,7 @@ void SentinelCamera::start()
 	decoder_thread = thread( &SentinelCamera::decoderThread, this );
 	archive_thread = thread( &SentinelCamera::archiveThread, this );
 	check_thread   = thread( &SentinelCamera::checkThread, this );
+	mp4_thread     = thread( &SentinelCamera::mp4Thread, this );
 }
 
 void SentinelCamera::initiateShutdown()
@@ -688,6 +689,7 @@ void SentinelCamera::initiateShutdown()
     abortDecoderThread = true;
     abortArchiveThread = true;
 	abortDeviceThread = true;
+	abortMp4Thread = true;
 }
 
 void SentinelCamera::completeShutdown()
@@ -696,6 +698,7 @@ void SentinelCamera::completeShutdown()
 	decoder_thread.join();
 	archive_thread.join();
 	device_thread.join();
+	mp4_thread.join();
 	std::cerr << "Shutdown" << std::endl;
 }
 
@@ -799,7 +802,7 @@ std::vector<std::unique_ptr<MappedBuffer>> SentinelCamera::map_decoder_buffers(i
     return buffers;
 }
 
-void SentinelCamera::readMask()
+void SentinelCamera::readMask( unsigned char* mFrame )
 {
 	std::cerr << "noise_level: " << noise_level << std::endl;
 
@@ -814,7 +817,7 @@ void SentinelCamera::readMask()
 	unsigned char* lpRowBuffer[1];
 
 	int frame_size = 1920 * 1080 / 9;
-    memset( maskFrame, noise_level, frame_size );
+    memset( mFrame, noise_level, frame_size );
 
 	FILE* fHandle;
 
@@ -859,7 +862,7 @@ void SentinelCamera::readMask()
 
         	if (r > 230 && g < 20 && b < 20)
 			{
-            	maskFrame[i] = 255;
+            	mFrame[i] = 255;
 				// std::cerr << "i: " << i << " r: " << r << " g: " << g << " b: " << b << std::endl;
 			}
 		}
@@ -1259,6 +1262,33 @@ string SentinelCamera::dateTimeString( int64_t timestamp_us )
 	return buff;
 }
 
+void SentinelCamera::mp4Thread()
+{
+	abortMp4Thread = false;
+	string mp4String;
+
+	for (;;)
+	{
+		{
+			std::unique_lock<std::mutex> locker(mp4_mutex);
+			mp4_cond_var.wait_for( locker, 1000ms, [this]() {
+				return abortMp4Thread || !mp4Queue.empty();
+			});
+
+			if ( abortMp4Thread )
+				break;
+
+			if ( mp4Queue.empty() )
+				continue;
+
+			mp4String = mp4Queue.front();
+			mp4Queue.pop();
+		}
+
+		system( mp4String.c_str() );
+	}
+}
+
 void SentinelCamera::archiveThread()
 {
 	abortArchiveThread = false;
@@ -1423,7 +1453,11 @@ void SentinelCamera::checkThread()
 			oss << "MP4Box -add " << videoPath 
 			    << " -fps " << iFrameRate 
 				<< " -quiet -new " << base << ".mp4";
-			system( oss.str().c_str() );
+
+			mp4_mutex.lock();
+			mp4Queue.push( oss.str() );
+			mp4_mutex.unlock();
+			mp4_cond_var.notify_one();
 		}
 		if ( textFile.is_open() )
 			textFile.close();
@@ -1617,8 +1651,8 @@ void SentinelCamera::calibrationFunction()
 
 void SentinelCamera::overlayMask( unsigned char* frame )
 {
-	maskFrame = new unsigned char[CHECK_FRAME_SIZE];
-    readMask();
+	unsigned char* localMaskFrame = new unsigned char[CHECK_FRAME_SIZE];
+    readMask( localMaskFrame );
 
     for (int iy = 0; iy < 1080; ++iy)
     {
@@ -1630,7 +1664,7 @@ void SentinelCamera::overlayMask( unsigned char* frame )
 
             int indexMask = 640*(iy/3) + ix/3;
 
-            if ( maskFrame[indexMask] == 255 )
+            if ( localMaskFrame[indexMask] == 255 )
             {
 				frame[indexY] = std::min(frame[indexY]+10,254);
                 frame[indexU] = 116;
@@ -1639,7 +1673,7 @@ void SentinelCamera::overlayMask( unsigned char* frame )
         }
     }
 
-	delete [] maskFrame;
+	delete [] localMaskFrame;
 }
 
 void SentinelCamera::makeComposite( string filePath )
@@ -1691,7 +1725,7 @@ void SentinelCamera::makeComposite( string filePath )
 void SentinelCamera::makeAnalysis( string filePath )
 {
 	int* averageBuffer = new int[1920*1080];
-	maskFrame = new unsigned char[CHECK_FRAME_SIZE];
+	unsigned char* localMaskFrame = new unsigned char[CHECK_FRAME_SIZE];
 
 	for ( int i = 0; i < 1920*1080; ++i )
 		averageBuffer[i] = 0;
@@ -1750,7 +1784,7 @@ void SentinelCamera::makeAnalysis( string filePath )
 		return true;
 	};
 
-	readMask();
+	readMask( localMaskFrame );
 
 	processDecoded( filePath, add30 );
 
@@ -1762,7 +1796,7 @@ void SentinelCamera::makeAnalysis( string filePath )
             int indexMask = 640*(iy/3)+(ix/3);
 
             averageBuffer[index] /= std::min(count,maxCount);
-            averageBuffer[index] += maskFrame[indexMask];
+            averageBuffer[index] += localMaskFrame[indexMask];
 
             if ( moonx != 0 && moony != 0 )
             {
@@ -1780,7 +1814,7 @@ void SentinelCamera::makeAnalysis( string filePath )
 	processDecoded( filePath, centroid );
 
 	delete [] averageBuffer;
-	delete [] maskFrame;
+	delete [] localMaskFrame;
 
 	string txtPath = filePath;
 	txtPath.replace(txtPath.find(".h264"),5,".csv");

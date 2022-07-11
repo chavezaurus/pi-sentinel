@@ -66,11 +66,15 @@ private:
     bool abortCheckThread;
     bool abortDecoderThread;
     bool abortArchiveThread;
+    bool abortMp4Thread;
 
     thread check_thread;
     thread device_thread;
     thread decoder_thread;
     thread archive_thread;
+    thread mp4_thread;
+
+    queue<string> mp4Queue;
 
     queue<int> input_buffers_available;
 
@@ -90,6 +94,7 @@ private:
 
     mutex meta_write_mutex;
     mutex meta_check_mutex;
+    mutex mp4_mutex;
 
     condition_variable checkCondition;
     bool force_event;
@@ -101,6 +106,7 @@ private:
 
     condition_variable decoder_cond_var;
     condition_variable archive_cond_var;
+    condition_variable mp4_cond_var;
 
     unsigned char* referenceFrame;
     unsigned char* maskFrame;
@@ -119,6 +125,7 @@ public:
     void stopDeviceCapture();
     void deviceCaptureThread();
     void decoderThread();
+    void mp4Thread();
 
     int signalAmplitude( unsigned char* pstart );
     double zenithAmplitude( unsigned char* pstart );
@@ -135,7 +142,7 @@ public:
     void encodeJPEG(void * mem, const string& fileName );
     void readCalibrationParameters();
     void calibrationFunction();
-    void readMask();
+    void readMask( unsigned char* mask );
     void overlayMask( unsigned char* frame );
     void makeComposite( string filePath );
     void makeAnalysis( string filePath );
