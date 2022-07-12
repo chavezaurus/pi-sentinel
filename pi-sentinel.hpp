@@ -169,6 +169,7 @@ public:
     int force_count;
     string archivePath;
     string dev_name;
+    string socket_name;
 
     mutex zenith_mutex;
     double averageZenithAmplitude;

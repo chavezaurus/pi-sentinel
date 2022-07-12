@@ -22,7 +22,7 @@
 using namespace std::chrono_literals;
 using namespace std::chrono;
 
-#define SOCKET_NAME "/tmp/sentinel.sock"
+#define DEFAULT_SOCKET_NAME "/tmp/sentinel.sock"
 #define CLEAR(x) memset(&(x), 0, sizeof(x))
 
 //
@@ -109,6 +109,7 @@ SentinelCamera::SentinelCamera()
 	gpsTimeOffset = 0.0;
 	force_event = false;
 	dev_name = "/dev/video2";
+	socket_name = DEFAULT_SOCKET_NAME;
 
 	syncTime();
 }
@@ -2091,7 +2092,7 @@ string executeCommand( SentinelCamera& sentinelCamera, std::istringstream& iss )
 	return oss.str();
 }
 
-void runSocket()
+void runSocket(string socket_name)
 {
 	const int BUF_SIZE = 256;
 	struct sockaddr_un addr;
@@ -2105,18 +2106,18 @@ void runSocket()
 	int sfd = socket(AF_UNIX, SOCK_STREAM, 0);
 
 	// Make sure the address we're planning to use isn't too long.
-	if (strlen(SOCKET_NAME) > sizeof(addr.sun_path) - 1)
+	if (socket_name.length() > sizeof(addr.sun_path) - 1)
 		throw std::runtime_error("Socket address too long");
 
 	// Delete any file that already exists at the address. Make sure the deletion
 	// succeeds. If the error is just that the file/directory doesn't exist, it's fine.
-	if (remove(SOCKET_NAME) == -1 && errno != ENOENT)
+	if (remove(socket_name.c_str()) == -1 && errno != ENOENT)
 		throw std::runtime_error("Could not remove old socket address");
 
 	// Zero out the address, and set family and path.
 	memset(&addr, 0, sizeof(struct sockaddr_un));
 	addr.sun_family = AF_UNIX;
-	strncpy(addr.sun_path, SOCKET_NAME, sizeof(addr.sun_path) - 1);
+	strncpy(addr.sun_path, socket_name.c_str(), sizeof(addr.sun_path) - 1);
 
 	// Bind the socket to the address. Note that we're binding the server socket
 	// to a well-known address so that clients know where to connect.
@@ -2223,16 +2224,19 @@ int main( int argc, char **argv )
 	int frame_count = 300;
 	int force_count = 200;
 	int noise_level = 50;
+	string socket_name = DEFAULT_SOCKET_NAME;
 	string path;
 
 	int opt;
 
-	while ((opt = getopt(argc, argv, "a:sd:c:f:n:")) != -1)
+	std::cerr << "Socket: " << socket_name << std::endl;
+
+	while ((opt = getopt(argc, argv, "a:s:d:c:f:n:")) != -1)
 	{
 		switch ( opt )
 		{
 			case 'a': analysis_test = true; path = optarg; break;
-			case 's': socket_interface = true; break;
+			case 's': socket_interface = true; socket_name = optarg; break;
 			case 'd': decoder_test = true; path = optarg; break;
 			case 'c': frame_count = std::stoi( optarg ); break;
 			case 'f': force_count = std::stoi( optarg ); break;
@@ -2240,12 +2244,14 @@ int main( int argc, char **argv )
 		}
 	}
 
+	std::cerr << "Socket: " << socket_name << std::endl;
+
 	if ( decoder_test )
 		runDecoderTest( path );
 	else if ( analysis_test )
 		runAnalysisTest( path );
 	else if ( socket_interface )
-		runSocket();
+		runSocket(socket_name);
 	else
 		runSingle( frame_count, force_count, noise_level );
 

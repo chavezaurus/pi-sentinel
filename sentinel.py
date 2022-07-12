@@ -310,11 +310,11 @@ class SentinelServer(object):
             response = {"response": None}
         return response
         
-    def connectToSentinel(self):
-        pid = Popen(["./pi-sentinel.bin", "-s"]).pid
+    def connectToSentinel(self,socketName):
+        pid = Popen(["./pi-sentinel.bin", "-s", socketName]).pid
         time.sleep(2.0)
         self.sentinelSocket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.sentinelSocket.connect("/tmp/sentinel.sock")
+        self.sentinelSocket.connect(socketName)
         background = Thread(target = self.backgroundProcess)
         background.daemon = True
         background.start()
@@ -877,9 +877,17 @@ conf =  {
 
 
 if __name__ == '__main__':
+    import sys
+    port = 9090
+    socketName = "/tmp/sentinel.sock"
+
     server = SentinelServer()
-    server.connectToSentinel()
-    cherrypy.config.update({'server.socket_host': '0.0.0.0', 'server.socket_port': 9090})
+    if len(sys.argv) > 1 and argv[1] in ["1","2","3","4"]:
+        port += int(argv[1])
+        socketName += argv[1]
+
+    server.connectToSentinel(socketName)
+    cherrypy.config.update({'server.socket_host': '0.0.0.0', 'server.socket_port': port})
     cherrypy.quickstart(server, '/', conf)
     # server.sentinelSocket.send("quit\n".encode())
     print("pi-sentinel end")
