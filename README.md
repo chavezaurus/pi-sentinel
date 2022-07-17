@@ -7,27 +7,29 @@ All-sky camera meteor detection and display software for the Raspberry Pi.
 The Pi Sentinel software requires the following external programs and libraries:
 
 ```
-sudo apt-get install git
-sudo apt-get install gpac
-sudo apt-get install libatlas-base-dev
-sudo apt-get install python3-pip
+sudo apt install libv4l-dev
+sudo apt install libjpeg-dev
+sudo apt install gpac
+sudo apt install libatlas-base-dev
+
 sudo pip3 install cherrypy
 sudo pip3 install pyephem
 sudo pip3 install scipy
-pip3 install --upgrade numpy
+sudo pip3 install --upgrade numpy
 ```
+The `lib4l-dev` install provides the library used to access the camera device and the hardware encoder.
 
-The `git` install allows us to access the github repository.
+The `libjpeg-dev` install provides the library used to encode and decode JPEG files.
 
 The `gpac` install provides the utility program (MP4Box) used to convert .h264 formatted files to .mp4.
 
 The `libatlas-base-dev` install provides numerical libraries used to for star ephemeris calculations. 
 
-The `python3-pip` install gives us pip3, which is needed for the next install.
-
 The `cherrypy` install provides the Python web server used for the graphical interface.
 
 The `pyephem` install provides routines for calculating star positions used for calibration.
+
+The `scipy` and `numpy` installs provide libraries used to calculate calibration parameters.
 
 ## Hardware 
 
@@ -71,15 +73,15 @@ Do this after installing the libraries mentioned above
 
 `cd pi-sentinel`
 
-* Make the C code
+* Make the C++ code
 
 `make`
 
 * Start Pi Sentinel and the web server
 
-`python3 sentinel.py`
+`./sentinel.py`
 
-Now open your web browser and connect to the IP address of your Raspberry Pi using port 9090.  Yours will be different but on my browser the address looks like this:
+Now open your web browser and connect to the IP address of your Raspberry Pi using port 9090.  Yours may be different but on my browser the address looks like this:
 
 ```192.168.1.20:9090```.
 
@@ -109,7 +111,6 @@ Next is the **Request Update** button.  Pressing this sends a request to the Pi 
 * **Noise Threshold** - Pixels values that are less than this number above background are ignored.
 * **Trigger Threshold** - If the sum of pixel values that are more than the noise threshold above background exceeds this number, then a trigger is initiated and an event is produced.
 * **Max Events Per Hour** - The nominal maximum number of events that can be produced per hour.  The way this works can be explained with an example.  Suppose that the Max Events Per Hour is set to 5.  When processing begins, Pi Sentinel has a starting credit of 5 events.  Every time an event occurs, the credit is reduced by 1.  If the credit reaches 0, no more events are allowed.  However, one credit is added every 12 minutes (1/5 hour) up to a maximum of 5 credits.
-* **Latency Millisecs** - This specifies the latency (in milliseconds) that is expected due to possible buffering in the camera.  In practice, I have not found a reason to change this from zero.
 * **Camera Device** - This specifies which video device is being used by the Raspberry Pi to connect to the camera.  This will typically be `/dev/videoN` where N is some number.  Cameras often connect to several devices if they provide several different data formats.  For Pi Sentinel you need to connect to the device that provides H264 formatted data.
 * **Archive Path** - This specifies the path to the directory that will contain the archive, which is all the video that the camera produces while Pi Sentinel is processing data.  If you do not wish to archive all the video, the path should be specified as: `none`.
 
@@ -123,9 +124,9 @@ If Pi Sentinel is not processing, then pressing the **Toggle Start/Stop** select
 
 Pressing the **Force Trigger** command will cause an event to be immediately generated.  This command is available only when Pi Sentinel is processing data from the camera.
 
-Pressing the **Make Composite** command will cause a composite image to be produced from the most recently selected event video.  Because making a composite image uses the same hardware decoder used by Pi Sentinel for normal camera processing, this command is available only when Pi Sentinel is not currently processing data from the camera.  
+Pressing the **Make Composite** command will cause a composite image to be produced from the most recently selected event video.
 
-Pressing the **Analyze** command will instruct the software to produce a CSV file (comma separated variable) that contains a time history of the event, including the time of each video frame, the number of pixels that are above the noise threshold, the sum of the pixel values above the noise threshold, the X and Y coordinates of the centroid of the pixels above the noise threshold, and the calculated azimuth and elevation of this centroid.  Azimuth and elevation calculations depend on accurate calibration parameters so make sure a full calibration is done beforehand.  Like the previous command, this command is available only when Pi Sentinel is not currently processing data from the camera.
+Pressing the **Analyze** command will instruct the software to produce a CSV file (comma separated variable) that contains a time history of the event, including the time of each video frame, the number of pixels that are above the noise threshold, the sum of the pixel values above the noise threshold, the X and Y coordinates of the centroid of the pixels above the noise threshold, and the calculated azimuth and elevation of this centroid.  Azimuth and elevation calculations depend on accurate calibration parameters so make sure a full calibration is done beforehand.
 
 Ideally, you should see pixel values above the noise threshold only when a meteor is present.  However, if examining the CVS file shows pixel values above the noise threshold at other times, you should consider raising the **Noise Threshold** value in the **Controls** pane and remaking the CVS file.  
 
@@ -165,7 +166,7 @@ Press the **Playback** button to select the **Playback Pane** as shown below.
 
 If you decide to maintain a video archive, the Playback capability lets you go into the archive and generate event files at any time and with any duration, as if a genuine event occurred at that time.  This can be useful if you know from other sources that a meteor event occurred at a specific time but Pi Sentinel did not trigger for whatever reason.  Or, perhaps Pi Sentinel did produce an event, but the event video started too late or cut off too soon. In this case, the Playback capability will let you produce a new event with expanded time coverage.
 
-The **Playback** pane lets you specify a start time and a duration in seconds.  For convenience, the start time is initialized to the time of the last event selected.  If the video archive contains video that matches the specified start time and duration, then Pi Sentinel creates a new event and places it in the `new` directory where it can be examined and moved just like any other event.  To distinquish *normal* events from *playback* events, the *playback* event names are shorter since they do not specify time to millisecond resolution. 
+The **Playback** pane lets you specify a start time and a duration in seconds.  For convenience, the start time is initialized to the time of the last event selected.  If the video archive contains video that matches the specified start time and duration, then Pi Sentinel creates a new event and places it in the `new` directory where it can be examined and moved just like any other event.
 
 ### Cal Pane
 
@@ -197,9 +198,9 @@ To see how well the calibration worked, go to the **Events** pane, select one of
 
 ## Mask File
 
-The mask file is used to specify areas of the image that should be ignored.  The mask file contains an image of the camera field of view in which the areas to be ignored are painted red.  The image should be scaled to 640 pixels wide and 360 pixels high and be saved as `mask.ppm` (PPM format) in the same directory as `sentinel.py`.  
+The mask file is used to specify areas of the image that should be ignored.  The mask file contains an image of the camera field of view in which the areas to be ignored are painted red.  The image should be scaled to 640 pixels wide and 360 pixels high and be saved as `mask.jpg` (JPEG format) in the same directory as `sentinel.py`.  
 
-To produce this file, I started with an event video (either naturally occurring or forced) and created a composite JPEG image file.  I then opened the JPEG file with Gimp, scaled it to 640 x 360 pixels, selected the Pencil tool, widened the tool to a convenient size, selected solid red as the foreground color, and then painted the areas of the image red that were not open sky.  I then did an Export As... and saved the result as `mask.ppm`.  Gimp can be run on the Raspberry Pi or on any other computer.
+To produce this file, I started with an event video (either naturally occurring or forced) and created a composite JPEG image file.  I then opened the JPEG file with Gimp, scaled it to 640 x 360 pixels, selected the Pencil tool, widened the tool to a convenient size, selected solid red as the foreground color, and then painted the areas of the image red that were not open sky.  I then did an Export As... and saved the result as `mask.jpg`.  Gimp can be run on the Raspberry Pi or on any other computer.
 
 The mask file is read by the sentinel program every time it starts.
 

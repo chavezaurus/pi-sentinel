@@ -286,20 +286,38 @@ class SentinelServer(object):
         while cherrypy.engine.state != cherrypy.engine.states.STARTED:
             time.sleep(1)
 
-        self.gpsProcess = Popen(['python3', './gpsparse.py'], stdin=None, stdout=PIPE, shell=False, universal_newlines=True)
+        self.gpsProcess = Popen(['python3', './gpsparse.py'])
+        time.sleep(1)
 
         while cherrypy.engine.state == cherrypy.engine.states.STARTED:
-            line = self.gpsProcess.stdout.readline()
-            if not line:
-                time.sleep(1.0)
-                continue
+            # Create a UDS socket
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 
+            # Connect the socket to the port where the server is listening
+            server_address = '/tmp/sentinel_time.sock'
+            try:
+                sock.connect(server_address)
+            except:
+                return      
+
+            try:
+                amount_received = 0
+                amount_expected = 52
+                line = ""
+                
+                while amount_received < amount_expected:
+                    line += sock.recv(52).decode()
+                    amount_received += len(line)
+            finally:
+                sock.close()          
+            
             items = line.split()
             self.gps_latitude = float(items[3])
             self.gps_longitude = float(items[4])
             self.gps_time_offset = float(items[2])
             self.funnelCmd("set_gps_time_offset %7.3f" % self.gps_time_offset)
-            print(line,end='')
+            print(line)
+            time.sleep(10)
 
     def funnelCmd( self, cmd ):
         responseQueue = Queue()
