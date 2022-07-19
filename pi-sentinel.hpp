@@ -67,12 +67,14 @@ private:
     bool abortDecoderThread;
     bool abortArchiveThread;
     bool abortMp4Thread;
+    bool abortDecompressThread;
 
     thread check_thread;
     thread device_thread;
     thread decoder_thread;
     thread archive_thread;
     thread mp4_thread;
+    thread decompress_thread;
 
     queue<string> mp4Queue;
 
@@ -107,6 +109,7 @@ private:
     condition_variable decoder_cond_var;
     condition_variable archive_cond_var;
     condition_variable mp4_cond_var;
+    condition_variable decompress_cond_var;
 
     unsigned char* referenceFrame;
     unsigned char* maskFrame;
@@ -126,6 +129,7 @@ public:
     void deviceCaptureThread();
     void decoderThread();
     void mp4Thread();
+    void decompressThread();
 
     int signalAmplitude( unsigned char* pstart );
     double zenithAmplitude( unsigned char* pstart );
@@ -148,6 +152,7 @@ public:
     void makeAnalysis( string filePath );
     void makeStarChart( string filePath );
     void forceEvent();
+    void mjpegToH264( string filePath );
 
     void openDevice( string devicePath );
     void closeDevice();
@@ -161,6 +166,7 @@ public:
     string dateTimeString( int64_t timestamp_us );
 
     bool running;
+    bool mjpeg;
     int noise_level;
     int moonx;
     int moony;

@@ -14,6 +14,7 @@
 #include <unistd.h>
 #include <libv4l2.h>
 #include <jpeglib.h>
+#include <turbojpeg.h>
 #include <math.h>
 #include <list>
 
@@ -97,6 +98,7 @@ static void Parse( const char* json, map<string,double>& doubleMap )
 SentinelCamera::SentinelCamera()
 {
 	running = false;
+	mjpeg = true;
 	max_frame_count = 0;
 	noise_level = 45;
 	moonx = 0;
@@ -108,7 +110,7 @@ SentinelCamera::SentinelCamera()
 	frameRate = 30.0;
 	gpsTimeOffset = 0.0;
 	force_event = false;
-	dev_name = "/dev/video2";
+	dev_name = "/dev/video0";
 	socket_name = DEFAULT_SOCKET_NAME;
 
 	syncTime();
@@ -602,23 +604,15 @@ void SentinelCamera::deviceCaptureThread()
 			// std::cerr << "Storage full" << std::endl;
 		}
 
-		// Write H264 frame to ram storage
+		StorageMeta meta;
+		meta.timestamp_us = buf.timestamp.tv_sec * 1000000.0 + buf.timestamp.tv_usec;
+
+		// Write frame to ram storage
 		memcpy(storage+offset,deviceBuffers[buf.index].mem,buf.bytesused);
 
-		StorageMeta meta;
 		meta.offset = offset;
 		meta.size = buf.bytesused;
-		meta.timestamp_us = buf.timestamp.tv_sec * 1000000.0 + buf.timestamp.tv_usec;
 		meta.key_frame = isIDR(storage+offset, buf.bytesused);
-
-		measureFrameRate(buf.timestamp.tv_usec);
-
-		// std::cerr << metaWriteIndex << " " << meta.size << " " << meta.timestamp_us << std::endl;
-
-		// if ( meta.key_frame )
-		// 	std::cerr << "Key frame: " << meta.timestamp_us << std::endl;
-
-		offset += buf.bytesused;
 
 		storageMetas[metaWriteIndex] = meta;
 
@@ -626,12 +620,25 @@ void SentinelCamera::deviceCaptureThread()
 		metaWriteIndex = (metaWriteIndex + 1) % NUM_STORAGE_META;
 		meta_write_mutex.unlock();
 
-		decoder_cond_var.notify_one();
-		archive_cond_var.notify_one();
+		if ( mjpeg )
+		{
+			decompress_cond_var.notify_one();
+		}
+		else
+		{
+			decoder_cond_var.notify_one();
+			archive_cond_var.notify_one();
+		}
+
+		measureFrameRate(buf.timestamp.tv_usec);
+
+		offset += buf.bytesused;
 
     	if (-1 == xioctl(device_fd, VIDIOC_QBUF, &buf))
 			throw std::runtime_error("Error with VIDIOC_QBUF");
 	}
+
+	delete [] storage;
 
 	stopDeviceCapture();
 	uninitDevice();
@@ -678,28 +685,52 @@ void SentinelCamera::start()
 	metaCheckIndex = 0;
 
 	device_thread  = thread( &SentinelCamera::deviceCaptureThread, this );
-	decoder_thread = thread( &SentinelCamera::decoderThread, this );
-	archive_thread = thread( &SentinelCamera::archiveThread, this );
 	check_thread   = thread( &SentinelCamera::checkThread, this );
 	mp4_thread     = thread( &SentinelCamera::mp4Thread, this );
+
+	if ( mjpeg )
+	{
+		decompress_thread = thread( &SentinelCamera::decompressThread, this );
+	}
+	else
+	{
+		decoder_thread = thread( &SentinelCamera::decoderThread, this );
+		archive_thread = thread( &SentinelCamera::archiveThread, this );
+	}
 }
 
 void SentinelCamera::initiateShutdown()
 {
-	abortCheckThread = true;
-    abortDecoderThread = true;
-    abortArchiveThread = true;
-	abortDeviceThread = true;
+	if ( mjpeg )
+	{
+		abortDecompressThread = true;
+	}
+	else
+	{
+		abortDecoderThread = true;
+		abortArchiveThread = true;
+	}
+		
 	abortMp4Thread = true;
+	abortCheckThread = true;
+	abortDeviceThread = true;
 }
 
 void SentinelCamera::completeShutdown()
 {
+	if ( mjpeg )
+	{
+		decompress_thread.join();
+	}
+	else
+	{
+		decoder_thread.join();
+		archive_thread.join();
+	}
+
 	check_thread.join();
-	decoder_thread.join();
-	archive_thread.join();
-	device_thread.join();
 	mp4_thread.join();
+	device_thread.join();
 	std::cerr << "Shutdown" << std::endl;
 }
 
@@ -1266,7 +1297,7 @@ string SentinelCamera::dateTimeString( int64_t timestamp_us )
 void SentinelCamera::mp4Thread()
 {
 	abortMp4Thread = false;
-	string mp4String;
+	string base;
 
 	for (;;)
 	{
@@ -1282,13 +1313,110 @@ void SentinelCamera::mp4Thread()
 			if ( mp4Queue.empty() )
 				continue;
 
-			mp4String = mp4Queue.front();
+			base = mp4Queue.front();
 			mp4Queue.pop();
 		}
 
-		system( mp4String.c_str() );
+		std::ostringstream oss;
+		int iFrameRate = round(frameRate);
+		string videoPath = base + (mjpeg ? ".mjpeg" : ".h264");
+
+		// Make .mp4 file from .h264 file
+		oss << "MP4Box -add " << videoPath 
+			<< " -fps " << iFrameRate 
+			<< " -quiet -new " << base << ".mp4";
+
+		// std::cerr << oss.str() << std::endl;
+
+		system( oss.str().c_str() );
 	}
 }
+
+void SentinelCamera::mjpegToH264( string filePath )
+{
+	int encoder_fd;
+	createEncoder( encoder_fd );
+
+	string textPath = filePath;
+	textPath.replace(textPath.find(".mjpeg"),6,".txt");
+
+	string h264Path = filePath;
+	h264Path.replace(h264Path.find(".mjpeg"),6,".h264");
+}
+
+void SentinelCamera::decompressThread()
+{
+	abortDecompressThread = false;
+	int decompressIndex = 0;
+
+	tjhandle handle = tjInitDecompress();
+	unsigned char* yuv = new unsigned char[1920*1088*3/2];
+	unsigned char* planes[3];
+	planes[0] = yuv;
+	planes[1] = yuv+1920*1088;
+	planes[2] = yuv+1920*1088+1920*1088/4;
+
+	referenceFrame = new unsigned char[CHECK_FRAME_SIZE];
+	maskFrame      = new unsigned char[CHECK_FRAME_SIZE];
+
+	memset(referenceFrame, 0xff, CHECK_FRAME_SIZE);
+	memset(maskFrame, noise_level, CHECK_FRAME_SIZE);
+
+	readMask( maskFrame );
+
+	for (;;)
+	{
+		{
+			std::unique_lock<std::mutex> locker(meta_write_mutex);
+			decompress_cond_var.wait_for( locker, 200ms, [this,decompressIndex]() {
+				return abortDecompressThread || (metaWriteIndex != decompressIndex);
+			});
+
+			if ( abortDecompressThread )
+				break;
+
+			if ( metaWriteIndex == decompressIndex )
+				continue;
+		}
+
+		StorageMeta sMeta = storageMetas[decompressIndex];
+		unsigned char* jpeg = storage+sMeta.offset;
+		int size = sMeta.size;
+		long int msec = sMeta.timestamp_us / 1000;
+
+		auto start_timer = high_resolution_clock::now();
+		int err = tjDecompressToYUVPlanes(handle,jpeg,size,planes,1920,0,1080,0);
+		if ( err < 0 )
+			throw std::runtime_error("Decompress failure");
+
+		int amplitude = signalAmplitude(yuv);
+		zenith_mutex.lock();
+		averageZenithAmplitude = zenithAmplitude( yuv );
+		zenith_mutex.unlock();
+		storageMetas[decompressIndex].signalAmplitude = amplitude;
+
+		meta_check_mutex.lock();
+		metaCheckIndex = (metaCheckIndex+1) % NUM_STORAGE_META;
+		meta_check_mutex.unlock();
+
+		checkCondition.notify_one();
+
+		auto stop_timer = high_resolution_clock::now();
+		auto duration = duration_cast<microseconds>(stop_timer - start_timer);	
+		std::cerr << "Dur: " << duration.count() << " msec: " << msec << " Amp: " << amplitude << std::endl;
+
+		decompressIndex = (decompressIndex+1) % NUM_STORAGE_META;
+	}
+
+	delete [] referenceFrame;
+	delete [] maskFrame;
+
+	delete [] yuv;
+	tjDestroy( handle );
+}
+
+
+
 
 void SentinelCamera::archiveThread()
 {
@@ -1389,7 +1517,7 @@ void SentinelCamera::checkThread()
 		base = "new/s";
 		base = base + dateTimeString( frameTime );
 
-		videoPath = base + ".h264";
+		videoPath = base + (mjpeg ? ".mjpeg" : ".h264");
 		textPath =  base + ".txt";
 
 		videoFile.open( videoPath, std::ios::binary );
@@ -1403,7 +1531,7 @@ void SentinelCamera::checkThread()
 		// Find the key frame at least 30 frames earlier 
 		int writeIndex = (checkIndex + NUM_STORAGE_META - 30) % NUM_STORAGE_META;
 		frameOffset = -30;
-		while ( !storageMetas[writeIndex].key_frame )
+		while ( !mjpeg && !storageMetas[writeIndex].key_frame )
 		{
 			writeIndex = (writeIndex + NUM_STORAGE_META - 1) % NUM_STORAGE_META;
 			--frameOffset;
@@ -1438,7 +1566,6 @@ void SentinelCamera::checkThread()
 	auto terminateTrigger = [&,this](){
 		triggered = false;
 		untriggered = false;
-		std::ostringstream oss;
 
 		rateLimitBank = std::max(0,rateLimitBank-FRAMES_PER_HOUR/max_events_per_hour);
 
@@ -1448,15 +1575,9 @@ void SentinelCamera::checkThread()
 		if ( videoFile.is_open() )
 		{
 			videoFile.close();
-			int iFrameRate = round(frameRate);
-
-			// Make .mp4 file from .h264 file
-			oss << "MP4Box -add " << videoPath 
-			    << " -fps " << iFrameRate 
-				<< " -quiet -new " << base << ".mp4";
 
 			mp4_mutex.lock();
-			mp4Queue.push( oss.str() );
+			mp4Queue.push( base );
 			mp4_mutex.unlock();
 			mp4_cond_var.notify_one();
 		}
