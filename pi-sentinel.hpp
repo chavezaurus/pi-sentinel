@@ -78,11 +78,9 @@ private:
 
     queue<string> mp4Queue;
 
-    queue<int> input_buffers_available;
-
     static constexpr int NUM_DEVICE_BUFFERS = 4;
-    static constexpr int NUM_OUTPUT_BUFFERS = 6;
-    static constexpr int NUM_CAPTURE_BUFFERS = 12;
+    static constexpr int NUM_OUTPUT_BUFFERS = 8;
+    static constexpr int NUM_CAPTURE_BUFFERS = 10;
     static constexpr int CHECK_FRAME_SIZE = 640 * 360;
     static constexpr int STORAGE_SIZE = 1024 << 13;
     static constexpr int NUM_STORAGE_META = 150;
@@ -141,8 +139,9 @@ public:
     void createEncoder( int& encoder_fd);
     void createDecoder( int& decoder_fd);
     void syncTime();
+    void processMjpeg( string filePath, ProcessType process );
     void processDecoded( string videoFilePath, ProcessType process );
-    void stopDecoder( int& decoder_fd );
+    void stopCodec( int& decoder_fd );
     void encodeJPEG(void * mem, const string& fileName );
     void readCalibrationParameters();
     void calibrationFunction();
@@ -162,7 +161,7 @@ public:
 
     bool isIDR(const unsigned char *p, int size);
 
-    std::vector<std::unique_ptr<MappedBuffer>> map_decoder_buffers(int decoder_fd, v4l2_buf_type const type);
+    std::vector<std::unique_ptr<MappedBuffer>> map_buffers(int fd, v4l2_buf_type const type);
     string dateTimeString( int64_t timestamp_us );
 
     bool running;

@@ -13,7 +13,6 @@
 #include <string.h>
 #include <unistd.h>
 #include <libv4l2.h>
-#include <jpeglib.h>
 #include <turbojpeg.h>
 #include <math.h>
 #include <list>
@@ -98,7 +97,7 @@ static void Parse( const char* json, map<string,double>& doubleMap )
 SentinelCamera::SentinelCamera()
 {
 	running = false;
-	mjpeg = true;
+	mjpeg = false;
 	max_frame_count = 0;
 	noise_level = 45;
 	moonx = 0;
@@ -110,7 +109,7 @@ SentinelCamera::SentinelCamera()
 	frameRate = 30.0;
 	gpsTimeOffset = 0.0;
 	force_event = false;
-	dev_name = "/dev/video0";
+	dev_name = "/dev/video2";
 	socket_name = DEFAULT_SOCKET_NAME;
 
 	syncTime();
@@ -395,8 +394,8 @@ void SentinelCamera::decoderThread()
 
     auto const coded_buf_type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
     auto const decoded_buf_type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-    auto const coded_buffers = map_decoder_buffers(decoder_fd, coded_buf_type);
-    auto const decoded_buffers = map_decoder_buffers(decoder_fd, decoded_buf_type);
+    auto const coded_buffers = map_buffers(decoder_fd, coded_buf_type);
+    auto const decoded_buffers = map_buffers(decoder_fd, decoded_buf_type);
 
     std::vector<MappedBuffer*> coded_free, decoded_free;
     for (auto const &b : coded_buffers) 
@@ -471,10 +470,10 @@ void SentinelCamera::decoderThread()
 		{
             auto* decoded = decoded_free.back();
             decoded_free.pop_back();
-			// std::cerr << "decoded Q " <<  decoded_free.size() << std::endl;
+			// std::cerr << "decoded Q " <<  decoded->buffer.index << std::endl;
 
             if (v4l2_ioctl(decoder_fd, VIDIOC_QBUF, &decoded->buffer))
-				throw std::runtime_error( "error cycling buffer " );
+				throw std::runtime_error( "decoderThread: error cycling decoded buffer 1" );
         }
 
         // Receive decoded data and return the buffers.
@@ -486,24 +485,22 @@ void SentinelCamera::decoderThread()
 				throw std::runtime_error( "bad decoded index");
 
             auto* decoded = decoded_buffers[received.index].get();
+			// std::cerr << "decoded DQ " << decoded->buffer.index << std::endl;
 
 			unsigned char* dptr = (unsigned char *)decoded->mmap;
 
-			// auto start_timer = high_resolution_clock::now();
+			auto start_timer = high_resolution_clock::now();
 			int sa = signalAmplitude( dptr );
 			zenith_mutex.lock();
     		averageZenithAmplitude = zenithAmplitude( dptr );
 			zenith_mutex.unlock();
 
-			// auto stop_timer = high_resolution_clock::now();
-			// auto duration = duration_cast<microseconds>(stop_timer - start_timer);	
-			// std::cerr << "Duration: " << duration.count() << std::endl;
+			auto stop_timer = high_resolution_clock::now();
+			auto duration = duration_cast<microseconds>(stop_timer - start_timer);	
+			std::cerr << "Duration: " << duration.count() 
+			          << " Amplitude: " << sa << std::endl;
 
 			storageMetas[metaCheckIndex].signalAmplitude = sa;
-
-            // decoded_free.push_back(decoded);
-			// std::cerr << "decoded DQ " << metaCheckIndex << " " 
-			// 		  << sa << std::endl;
 
 			meta_check_mutex.lock();
 			metaCheckIndex = (metaCheckIndex+1) % NUM_STORAGE_META;
@@ -511,10 +508,9 @@ void SentinelCamera::decoderThread()
 
 			checkCondition.notify_one();
 
+			// std::cerr << "decoded Q " << decoded->buffer.index << std::endl;
             if (v4l2_ioctl(decoder_fd, VIDIOC_QBUF, &decoded->buffer))
-				throw std::runtime_error( "error cycling buffer " );
-
-			// std::cerr << "decoded Q " <<  decoded_free.size() << std::endl;
+				throw std::runtime_error( "decoderThread: error cycling decoded buffer 2" );
 
 			if ( ++count > 2 )
 				break;
@@ -523,7 +519,7 @@ void SentinelCamera::decoderThread()
 			throw std::runtime_error( "error receiving decoded buffers" );
 	}
 
-	stopDecoder( decoder_fd );
+	stopCodec( decoder_fd );
 
 	delete [] referenceFrame;
 	delete [] maskFrame;
@@ -774,7 +770,7 @@ void SentinelCamera::createDecoder( int& decoder_fd )
 		throw std::runtime_error("error setting coded format");
 
     v4l2_requestbuffers coded_reqbuf = {};
-    coded_reqbuf.count = 8;
+    coded_reqbuf.count = NUM_OUTPUT_BUFFERS;
     coded_reqbuf.type = coded_format.type;
     coded_reqbuf.memory = V4L2_MEMORY_MMAP;
     if (v4l2_ioctl(decoder_fd, VIDIOC_REQBUFS, &coded_reqbuf))
@@ -789,7 +785,7 @@ void SentinelCamera::createDecoder( int& decoder_fd )
 		throw std::runtime_error("error getting decoded format");
 
     v4l2_requestbuffers decoded_reqbuf = {};
-    decoded_reqbuf.count = 8;
+    decoded_reqbuf.count = NUM_CAPTURE_BUFFERS;
     decoded_reqbuf.type = decoded_format.type;
     decoded_reqbuf.memory = V4L2_MEMORY_MMAP;
     if (v4l2_ioctl(decoder_fd, VIDIOC_REQBUFS, &decoded_reqbuf))
@@ -799,19 +795,22 @@ void SentinelCamera::createDecoder( int& decoder_fd )
 		throw std::runtime_error("error starting decoded stream");
 }
 
-std::vector<std::unique_ptr<MappedBuffer>> SentinelCamera::map_decoder_buffers(int decoder_fd, v4l2_buf_type const type) 
+std::vector<std::unique_ptr<MappedBuffer>> SentinelCamera::map_buffers(int fd, v4l2_buf_type const type) 
 {
     std::vector<std::unique_ptr<MappedBuffer>> buffers;
 
     for (int bi = 0;; ++bi) 
 	{
         auto mapped = std::make_unique<MappedBuffer>();
+		v4l2_buffer *inner = &mapped->buffer;
+		memset(inner, 0, sizeof(*inner));
         mapped->buffer.type = type;
+		mapped->buffer.memory = V4L2_MEMORY_MMAP;
         mapped->buffer.index = bi;
         mapped->buffer.length = 1;
         mapped->buffer.m.planes = &mapped->plane;
 
-        if (v4l2_ioctl(decoder_fd, VIDIOC_QUERYBUF, &mapped->buffer)) 
+        if (v4l2_ioctl(fd, VIDIOC_QUERYBUF, &mapped->buffer)) 
 		{
             if (bi > 0 && errno == EINVAL) 
 				break;
@@ -821,7 +820,7 @@ std::vector<std::unique_ptr<MappedBuffer>> SentinelCamera::map_decoder_buffers(i
 
         mapped->size = mapped->plane.length;
         mapped->mmap = mmap(
-            nullptr, mapped->size, PROT_READ | PROT_WRITE, MAP_SHARED, decoder_fd,
+            nullptr, mapped->size, PROT_READ | PROT_WRITE, MAP_SHARED, fd,
             mapped->plane.m.mem_offset
         );
 
@@ -838,69 +837,98 @@ void SentinelCamera::readMask( unsigned char* mFrame )
 {
 	std::cerr << "noise_level: " << noise_level << std::endl;
 
-	struct jpeg_decompress_struct info;
-	struct jpeg_error_mgr err;
+	const int JPEG_MAX_SIZE = 1000000;
 
-	unsigned long int imgWidth, imgHeight;
+	tjhandle handle = tjInitDecompress();
+	unsigned char* lpData = new unsigned char[640*360*3];
+	unsigned char* jpeg = new unsigned char[JPEG_MAX_SIZE];
 
-	unsigned long int dwBufferBytes;
-	unsigned char* lpData;
-
-	unsigned char* lpRowBuffer[1];
-
-	int frame_size = 1920 * 1080 / 9;
-    memset( mFrame, noise_level, frame_size );
-
-	FILE* fHandle;
-
-	fHandle = fopen( "mask.jpg", "rb");
-	if ( fHandle == NULL )
+	std::ifstream jpegFile;
+	jpegFile.open( "mask.jpg" );
+	if ( !jpegFile )
 	{
 		std::cerr << "No mask file found. Noise level set to: " << noise_level << std::endl;
 		return;
 	}
+	jpegFile.read( (char *)jpeg, JPEG_MAX_SIZE);
+	int jpegSize = jpegFile.gcount();
+	int pixelSize = tjPixelSize[TJPF_RGB];
+	int err = tjDecompress2(handle,jpeg,jpegSize,lpData,
+	                        640,640*pixelSize,360,TJPF_RGB,TJFLAG_ACCURATEDCT);
+	if ( err < 0 )
+		throw std::runtime_error("Jpeg decompress failure");
 
-	info.err = jpeg_std_error(&err);
-	jpeg_create_decompress(&info);
-
-	jpeg_stdio_src(&info, fHandle);
-	jpeg_read_header(&info, TRUE);
-
-	jpeg_start_decompress(&info);
-	imgWidth = info.output_width;
-	imgHeight = info.output_height;
-
-	dwBufferBytes = imgWidth * imgHeight * 3; /* We only read RGB, not A */
-	lpData = new unsigned char[dwBufferBytes];
-
-	/* Read scanline by scanline */
-	while ( info.output_scanline < info.output_height ) 
+	for ( int i = 0; i < 640*360; ++i )
 	{
-		lpRowBuffer[0] = (unsigned char *)(&lpData[3*info.output_width*info.output_scanline]);
-		jpeg_read_scanlines(&info, lpRowBuffer, 1);
-	}
+		int r = lpData[3*i];
+		int g = lpData[3*i+1];
+		int b = lpData[3*i+2];
 
-	jpeg_finish_decompress(&info);
-	jpeg_destroy_decompress(&info);
-	fclose(fHandle);
-
-	if ( imgWidth == 640 && imgHeight == 360 )
-	{
-		for ( int i = 0; i < 640*360; ++i )
+		if (r > 230 && g < 20 && b < 20)
 		{
-			int r = lpData[3*i];
-			int g = lpData[3*i+1];
-			int b = lpData[3*i+2];
-
-        	if (r > 230 && g < 20 && b < 20)
-			{
-            	mFrame[i] = 255;
-				// std::cerr << "i: " << i << " r: " << r << " g: " << g << " b: " << b << std::endl;
-			}
+			mFrame[i] = 255;
+			// std::cerr << "i: " << i << " r: " << r << " g: " << g << " b: " << b << std::endl;
 		}
 	}
 
 	delete[] lpData;
+	delete[] jpeg;
+
+	tjDestroy( handle );
+}
+
+void SentinelCamera::processMjpeg( string filePath, ProcessType process )
+{
+	const int YUV_SIZE = 1920*1080*3/2;
+	const int JPEG_MAX_SIZE = 1000000;
+
+	std::ifstream mjpegFile;
+	mjpegFile.open( filePath, std::ios::binary );
+	if ( !mjpegFile.is_open() )
+		return;
+
+	string textFilePath = filePath;
+	textFilePath.replace( textFilePath.find(".mjpeg"),6,".txt");
+	std::ifstream textFile;
+	textFile.open( textFilePath );
+	if ( !textFile.is_open() )
+		return;
+
+	tjhandle handle = tjInitDecompress();
+	unsigned char* yuv = new unsigned char[YUV_SIZE];
+	unsigned char* jpeg = new unsigned char[JPEG_MAX_SIZE];
+	unsigned char* planes[3];
+	planes[0] = yuv;
+	planes[1] = yuv+1920*1080;
+	planes[2] = yuv+1920*1080+1920*1080/4;
+	
+	for (;;)
+	{
+		int frameCount = 0;
+		string timeValue;
+		int frameSize = 0;
+		int signalAmplitude = 0;
+
+		textFile >> frameCount >> timeValue >> frameSize >> signalAmplitude;
+		if ( textFile.fail() )
+			break;
+
+		if ( frameSize > JPEG_MAX_SIZE )
+			throw std::runtime_error( "JPEG frame size too big");
+
+		mjpegFile.read( (char *)jpeg, frameSize );
+		int err = tjDecompressToYUVPlanes(handle,jpeg,frameSize,planes,1920,0,1080,0);
+		if ( err < 0 )
+			throw std::runtime_error("Decompress failure");
+
+		bool more = process(yuv,timeValue);
+		if ( !more )
+			break;
+	}
+
+	delete [] yuv;
+	delete [] jpeg;
+	tjDestroy( handle );
 }
 
 void SentinelCamera::processDecoded( string videoFilePath, ProcessType process )
@@ -924,13 +952,31 @@ void SentinelCamera::processDecoded( string videoFilePath, ProcessType process )
 	if ( !textFile.is_open() )
 		return;
 
+	vector<string> timeVector;
+	vector<int> sizeVector;
+
+	for (;;)
+	{
+		int frameCount = 0;
+		string timeValue;
+		int frameSize = 0;
+		int signalAmplitude = 0;
+
+		textFile >> frameCount >> timeValue >> frameSize >> signalAmplitude;
+		if ( textFile.fail() )
+			break;
+
+		timeVector.push_back( timeValue );
+		sizeVector.push_back( frameSize );
+	}
+
 	int decoder_fd;
 	createDecoder( decoder_fd );
 
     auto const coded_buf_type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
     auto const decoded_buf_type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-    auto const coded_buffers = map_decoder_buffers(decoder_fd, coded_buf_type);
-    auto const decoded_buffers = map_decoder_buffers(decoder_fd, decoded_buf_type);
+    auto const coded_buffers = map_buffers(decoder_fd, coded_buf_type);
+    auto const decoded_buffers = map_buffers(decoder_fd, decoded_buf_type);
 
     std::vector<MappedBuffer*> coded_free, decoded_free;
     for (auto const &b : coded_buffers) 
@@ -954,7 +1000,9 @@ void SentinelCamera::processDecoded( string videoFilePath, ProcessType process )
 	fds[0].events = POLLIN | POLLOUT;
 
 	bool more = true;
-	std::list<string> timeStrings;
+
+	unsigned int sizeIndex = 0;
+	unsigned int timeIndex = 0;
 
 	while ( more )
 	{
@@ -982,20 +1030,17 @@ void SentinelCamera::processDecoded( string videoFilePath, ProcessType process )
 
 		if ( !coded_free.empty() )
 		{
-			int frameCount = 0;
-			string timeValue;
-			int frameSize = 0;
-			int signalAmplitude = 0;
-
 			auto* coded = coded_free.back();
 			coded_free.pop_back();
 
-			textFile >> frameCount >> timeValue >> frameSize >> signalAmplitude;
-			if ( !textFile.fail() )
+			if ( sizeIndex < sizeVector.size() )
 			{
-				videoFile.read( (char *)coded->mmap, frameSize );
-				coded->plane.bytesused = frameSize;
-				timeStrings.push_back( timeValue );
+				int coded_size = sizeVector[sizeIndex++];
+				videoFile.read( (char *)coded->mmap, coded_size );
+				int bytesRead = videoFile.gcount();
+
+				coded->plane.bytesused = bytesRead;
+				std::cerr << "Used: " << videoFile.gcount() << std::endl;
 			}
 
         	if (v4l2_ioctl(decoder_fd, VIDIOC_QBUF, &coded->buffer))
@@ -1010,7 +1055,7 @@ void SentinelCamera::processDecoded( string videoFilePath, ProcessType process )
 			// std::cerr << "decoded Q " <<  decoded_free.size() << std::endl;
 
             if (v4l2_ioctl(decoder_fd, VIDIOC_QBUF, &decoded->buffer))
-				throw std::runtime_error( "error cycling buffer " );
+				throw std::runtime_error( "processDecoded: error cycling buffer " );
         }
 
         // Receive decoded data and return the buffers.
@@ -1020,15 +1065,16 @@ void SentinelCamera::processDecoded( string videoFilePath, ProcessType process )
             if (received.index > decoded_buffers.size())
 				throw std::runtime_error( "bad decoded index");
 
+			string timeValue = timeVector[timeIndex++];
+			more = timeIndex < timeVector.size();
+
             auto* decoded = decoded_buffers[received.index].get();
-			string timeString = timeStrings.front();
-			timeStrings.pop_front();
-			more = more && process( decoded->mmap, timeString );
+			more = more && process( decoded->mmap, timeValue );
+			std::cerr << "Time: " << timeValue << std::endl;
+
+			// int decoded_len = received.m.planes[0].bytesused;
 
             decoded_free.push_back(decoded);
-
-			if ( timeStrings.empty() )
-				more = false;
 
 			if ( !more )
 				break;
@@ -1037,103 +1083,58 @@ void SentinelCamera::processDecoded( string videoFilePath, ProcessType process )
 			throw std::runtime_error( "error receiving decoded buffers" );
 	}
 
-	if ( videoFile.is_open() )
-		videoFile.close();
-
-	if ( textFile.is_open() )
-		textFile.close();
-
-	stopDecoder( decoder_fd );
+	stopCodec( decoder_fd );
 }
 
-void SentinelCamera::stopDecoder( int& decoder_fd ) 
+void SentinelCamera::stopCodec( int& fd ) 
 {
     int coded_type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
-    if (v4l2_ioctl(decoder_fd, VIDIOC_STREAMOFF, &coded_type)) 
+    if (v4l2_ioctl(fd, VIDIOC_STREAMOFF, &coded_type)) 
 		throw std::runtime_error("error stopping coded stream");
 
     v4l2_requestbuffers coded_reqbuf = {};
     coded_reqbuf.type = coded_type;
     coded_reqbuf.memory = V4L2_MEMORY_MMAP;
-    if (v4l2_ioctl(decoder_fd, VIDIOC_REQBUFS, &coded_reqbuf)) 
+    if (v4l2_ioctl(fd, VIDIOC_REQBUFS, &coded_reqbuf)) 
 		throw std::runtime_error("error releasing coded buffers");
 
     int decoded_type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-    if (v4l2_ioctl(decoder_fd, VIDIOC_STREAMOFF, &decoded_type)) 
+    if (v4l2_ioctl(fd, VIDIOC_STREAMOFF, &decoded_type)) 
 		throw std::runtime_error("error stopping decoded stream");
 
     v4l2_requestbuffers decoded_reqbuf = {};
     decoded_reqbuf.type = decoded_type;
     decoded_reqbuf.memory = V4L2_MEMORY_MMAP;
-    if (v4l2_ioctl(decoder_fd, VIDIOC_REQBUFS, &decoded_reqbuf)) 
+    if (v4l2_ioctl(fd, VIDIOC_REQBUFS, &decoded_reqbuf)) 
 		throw std::runtime_error("error releasing decoded buffers");
 
-	close( decoder_fd );
+	close( fd );
 }
 
 void SentinelCamera::encodeJPEG( void* mem, const string& fileName )
 {
-	struct jpeg_compress_struct cinfo;
-	struct jpeg_error_mgr jerr;
-	cinfo.err = jpeg_std_error(&jerr);
-	jpeg_create_compress(&cinfo);
+	const int JPEG_MAX_SIZE = 1000000;
+	unsigned long jpegSize = JPEG_MAX_SIZE;
 
-	unsigned int width = 1920;
-	unsigned int height = 1080;
-	unsigned int stride = 1920;
-	unsigned int default_quality = 93;
+	tjhandle handle = tjInitCompress();
 
-	// Copied from YUV420_to_JPEG_fast in jpeg.cpp.
-	cinfo.image_width = width;
-	cinfo.image_height = height;
-	cinfo.input_components = 3;
-	cinfo.in_color_space = JCS_YCbCr;
-	cinfo.restart_interval = 0;
+	unsigned char* jpeg = new unsigned char[JPEG_MAX_SIZE];
+	const unsigned char* planes[3];
+	planes[0] = (unsigned char *)mem;
+	planes[1] = planes[0] + 1920*1088;
+	planes[2] = planes[1] + 1920*1088/4;
+	int strides[3] = {0,0,0};
 
-	jpeg_set_defaults(&cinfo);
-	cinfo.raw_data_in = TRUE;
-	jpeg_set_quality(&cinfo, default_quality, TRUE);
-	uint8_t* encoded_buffer = nullptr;
-	size_t buffer_len = 0;
-	unsigned long jpeg_mem_len;
-	jpeg_mem_dest(&cinfo, &encoded_buffer, &jpeg_mem_len);
-	jpeg_start_compress(&cinfo, TRUE);
-
-	int stride2 = stride / 2;
-	uint8_t *Y = (uint8_t *)mem;
-	uint8_t *U = (uint8_t *)Y + stride * (height + 8);
-	uint8_t *V = (uint8_t *)U + stride2 * (height / 2 + 4);
-	uint8_t *Y_max = U - stride;
-	uint8_t *U_max = V - stride2;
-	uint8_t *V_max = U_max + stride2 * (height / 2);
-
-	JSAMPROW y_rows[16];
-	JSAMPROW u_rows[8];
-	JSAMPROW v_rows[8];
-
-	for (uint8_t *Y_row = Y, *U_row = U, *V_row = V; cinfo.next_scanline < height;)
-	{
-		for (int i = 0; i < 16; i++, Y_row += stride)
-			y_rows[i] = std::min(Y_row, Y_max);
-
-		for (int i = 0; i < 8; i++, U_row += stride2, V_row += stride2)
-		{
-			u_rows[i] = std::min(U_row, U_max);
-			v_rows[i] = std::min(V_row, V_max);
-		}
-
-		JSAMPARRAY rows[] = { y_rows, u_rows, v_rows };
-		jpeg_write_raw_data(&cinfo, rows, 16);
-	}
-
-	jpeg_finish_compress(&cinfo);
-	buffer_len = jpeg_mem_len;
+	int err = tjCompressFromYUVPlanes(handle,planes,1920,strides,1080,TJSAMP_420,
+	                                  &jpeg,&jpegSize,90,TJFLAG_ACCURATEDCT);
+	if ( err < 0 )
+		throw std::runtime_error("Jpeg encode failure");
 
 	std::ofstream out( fileName.c_str(), std::ios::binary );
-	out.write( (char *)encoded_buffer, buffer_len );
-	out.close();
+	out.write( (char *)jpeg, jpegSize );
 
-	jpeg_destroy_compress(&cinfo);
+	delete [] jpeg;
+	tjDestroy(handle);
 }
 
 void SentinelCamera::createEncoder(int& encoder_fd)
@@ -1144,7 +1145,7 @@ void SentinelCamera::createEncoder(int& encoder_fd)
 	const int frameWidth = 1920;
 	const int frameHeight = 1080;
 
-	encoder_fd = open(device_name, O_RDWR, 0);
+	encoder_fd = open(device_name, O_RDWR | O_NONBLOCK);
 	if (encoder_fd < 0)
 		throw std::runtime_error("failed to open V4L2 H264 encoder");
 
@@ -1185,6 +1186,9 @@ void SentinelCamera::createEncoder(int& encoder_fd)
 
 	v4l2_format fmt = {};
 	fmt.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
+	if (xioctl(encoder_fd, VIDIOC_G_FMT, &fmt) < 0)
+		throw std::runtime_error("failed to get output format");
+
 	fmt.fmt.pix_mp.width = frameWidth;
 	fmt.fmt.pix_mp.height = frameHeight;
 	fmt.fmt.pix_mp.pixelformat = V4L2_PIX_FMT_YUV420;
@@ -1197,6 +1201,9 @@ void SentinelCamera::createEncoder(int& encoder_fd)
 
 	fmt = {};
 	fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+	if (xioctl(encoder_fd, VIDIOC_G_FMT, &fmt) < 0)
+		throw std::runtime_error("failed to get capture format");
+		
 	fmt.fmt.pix_mp.width = frameWidth;
 	fmt.fmt.pix_mp.height = frameHeight;
 	fmt.fmt.pix_mp.pixelformat = V4L2_PIX_FMT_H264;
@@ -1204,28 +1211,16 @@ void SentinelCamera::createEncoder(int& encoder_fd)
 	fmt.fmt.pix_mp.colorspace = V4L2_COLORSPACE_DEFAULT;
 	fmt.fmt.pix_mp.num_planes = 1;
 	fmt.fmt.pix_mp.plane_fmt[0].bytesperline = 0;
-	fmt.fmt.pix_mp.plane_fmt[0].sizeimage = 512 << 10;
+	fmt.fmt.pix_mp.plane_fmt[0].sizeimage = 256 << 10;
 	if (xioctl(encoder_fd, VIDIOC_S_FMT, &fmt) < 0)
 		throw std::runtime_error("failed to set capture format");
-
-	// Request that the necessary buffers are allocated. The output queue
-	// (input to the encoder) shares buffers from our caller, these must be
-	// DMABUFs. Buffers for the encoded bitstream must be allocated and
-	// m-mapped.
 
 	v4l2_requestbuffers reqbufs = {};
 	reqbufs.count = NUM_OUTPUT_BUFFERS;
 	reqbufs.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
-	reqbufs.memory = V4L2_MEMORY_DMABUF;
+	reqbufs.memory = V4L2_MEMORY_MMAP;
 	if (xioctl(encoder_fd, VIDIOC_REQBUFS, &reqbufs) < 0)
 		throw std::runtime_error("request for output buffers failed");
-
-	// std::cerr << "Got " << reqbufs.count << " output buffers" << std::endl;
-
-	// We have to maintain a list of the buffers we can use when our caller gives
-	// us another frame to encode.
-	for (unsigned int i = 0; i < reqbufs.count; i++)
-		input_buffers_available.push(i);
 
 	reqbufs = {};
 	reqbufs.count = NUM_CAPTURE_BUFFERS;
@@ -1234,35 +1229,12 @@ void SentinelCamera::createEncoder(int& encoder_fd)
 	if (xioctl(encoder_fd, VIDIOC_REQBUFS, &reqbufs) < 0)
 		throw std::runtime_error("request for capture buffers failed");
 
-	// std::cerr << "Got " << reqbufs.count << " capture buffers" << std::endl;
-
-	for (unsigned int i = 0; i < reqbufs.count; i++)
-	{
-		v4l2_plane planes[VIDEO_MAX_PLANES];
-		v4l2_buffer buffer = {};
-		buffer.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-		buffer.memory = V4L2_MEMORY_MMAP;
-		buffer.index = i;
-		buffer.length = 1;
-		buffer.m.planes = planes;
-		if (xioctl(encoder_fd, VIDIOC_QUERYBUF, &buffer) < 0)
-			throw std::runtime_error("failed to capture query buffer " + std::to_string(i));
-		buffers[i].mem = mmap(0, buffer.m.planes[0].length, PROT_READ | PROT_WRITE, MAP_SHARED, encoder_fd,
-							   buffer.m.planes[0].m.mem_offset);
-		if (buffers[i].mem == MAP_FAILED)
-			throw std::runtime_error("failed to mmap capture buffer " + std::to_string(i));
-		buffers[i].size = buffer.m.planes[0].length;
-		// Whilst we're going through all the capture buffers, we may as well queue
-		// them ready for the encoder to write into.
-		if (xioctl(encoder_fd, VIDIOC_QBUF, &buffer) < 0)
-			throw std::runtime_error("failed to queue capture buffer " + std::to_string(i));
-	}
-
 	// Enable streaming and we're done.
 
 	v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
 	if (xioctl(encoder_fd, VIDIOC_STREAMON, &type) < 0)
 		throw std::runtime_error("failed to start output streaming");
+
 	type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
 	if (xioctl(encoder_fd, VIDIOC_STREAMON, &type) < 0)
 		throw std::runtime_error("failed to start capture streaming");
@@ -1319,7 +1291,11 @@ void SentinelCamera::mp4Thread()
 
 		std::ostringstream oss;
 		int iFrameRate = round(frameRate);
-		string videoPath = base + (mjpeg ? ".mjpeg" : ".h264");
+
+		if ( mjpeg )
+			mjpegToH264( base+".mjpeg");
+
+		string videoPath = base + ".h264";
 
 		// Make .mp4 file from .h264 file
 		oss << "MP4Box -add " << videoPath 
@@ -1334,14 +1310,167 @@ void SentinelCamera::mp4Thread()
 
 void SentinelCamera::mjpegToH264( string filePath )
 {
-	int encoder_fd;
-	createEncoder( encoder_fd );
+	pollfd fds[1];
+	const int JPEG_MAX_SIZE = 1000000;
+	const int YUV_SIZE = 1920*1080*3/2;
+
+	std::ifstream mjpegFile;
+	mjpegFile.open( filePath, std::ios::binary );
+	if ( !mjpegFile.is_open() )
+		return;
 
 	string textPath = filePath;
 	textPath.replace(textPath.find(".mjpeg"),6,".txt");
 
 	string h264Path = filePath;
 	h264Path.replace(h264Path.find(".mjpeg"),6,".h264");
+
+	std::ifstream textFile;
+	textFile.open( textPath );
+	if ( !textFile.is_open() )
+		return;
+
+	std::ofstream h264File;
+	h264File.open( h264Path );
+	if ( !h264File.is_open() )
+		return;
+
+	tjhandle handle = tjInitDecompress();
+	unsigned char* yuv = new unsigned char[YUV_SIZE];
+	unsigned char* planes[3];
+	planes[0] = yuv;
+	planes[1] = yuv+1920*1080;
+	planes[2] = yuv+1920*1080+1920*1080/4;
+
+	unsigned char* jpeg = new unsigned char[JPEG_MAX_SIZE];
+
+	int encoder_fd;
+	createEncoder( encoder_fd );
+
+    auto const not_coded_buf_type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
+    auto const encoded_buf_type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+    auto const not_coded_buffers = map_buffers(encoder_fd, not_coded_buf_type);
+    auto const encoded_buffers = map_buffers(encoder_fd, encoded_buf_type);
+
+    std::vector<MappedBuffer*> not_coded_free, encoded_free;
+    for (auto const &b : not_coded_buffers) 
+		not_coded_free.push_back(b.get());
+    for (auto const &b : encoded_buffers) 
+		encoded_free.push_back(b.get());
+
+    v4l2_plane received_plane = {};
+    v4l2_buffer received = {};
+    received.memory = V4L2_MEMORY_MMAP;
+    received.length = 1;
+    received.m.planes = &received_plane;
+
+    v4l2_decoder_cmd command = {};
+    command.cmd = V4L2_ENC_CMD_START;
+    if (v4l2_ioctl(encoder_fd, VIDIOC_ENCODER_CMD, &command)) 
+		throw std::runtime_error("error sending start");
+
+	int timeout_msecs = 2000;
+	fds[0].fd = encoder_fd;
+	fds[0].events = POLLIN | POLLOUT;
+
+	bool more = true;
+	std::list<string> timeStrings;
+
+	while ( more )
+	{
+		int ret = poll(fds,1,timeout_msecs);
+		if ( ret == -1 )
+			throw std::runtime_error("Poll error");
+
+		if ( ret == 0 )
+		{
+			std::cerr << "Poll timeout" << std::endl;
+			continue;
+		}
+
+        // Reclaim not coded buffers once consumed by the encoder.
+        received.type = not_coded_buf_type;
+        while (!v4l2_ioctl(encoder_fd, VIDIOC_DQBUF, &received)) 
+		{
+            if (received.index > not_coded_buffers.size()) 
+				throw std::runtime_error( "bad reclaimed index");
+            not_coded_free.push_back(not_coded_buffers[received.index].get());
+			// std::cerr << "coded DQ " << coded_free.size() << std::endl;
+        }
+        if (errno != EAGAIN)
+			throw std::runtime_error( "error reclaiming coded buffer");
+
+		if ( !not_coded_free.empty() )
+		{
+			int frameCount = 0;
+			string timeValue;
+			int frameSize = 0;
+			int signalAmplitude = 0;
+
+			auto* not_coded = not_coded_free.back();
+			not_coded_free.pop_back();
+
+			textFile >> frameCount >> timeValue >> frameSize >> signalAmplitude;
+			if ( frameSize > JPEG_MAX_SIZE )
+				throw std::runtime_error( "JPEG frame size too big");
+
+			if ( !textFile.fail() )
+			{
+				mjpegFile.read( (char *)jpeg, frameSize );
+				int err = tjDecompressToYUVPlanes(handle,jpeg,frameSize,planes,1920,0,1080,0);
+				if ( err < 0 )
+					throw std::runtime_error("Decompress failure");
+
+				memcpy(not_coded->mmap, yuv, YUV_SIZE);
+				not_coded->plane.bytesused = YUV_SIZE;
+				timeStrings.push_back( timeValue );
+			}
+
+        	if (v4l2_ioctl(encoder_fd, VIDIOC_QBUF, &not_coded->buffer))
+				throw std::runtime_error("error sending not coded buffer");
+		}
+
+        // Send empty encoded buffers to be filled by the encoder.
+        while (!encoded_free.empty()) 
+		{
+            auto* encoded = encoded_free.back();
+            encoded_free.pop_back();
+			// std::cerr << "encoded Q " <<  encoded_free.size() << std::endl;
+
+            if (v4l2_ioctl(encoder_fd, VIDIOC_QBUF, &encoded->buffer))
+				throw std::runtime_error( "mjpegToH264: error cycling buffer " );
+        }
+
+        // Receive encoded data and return the buffers.
+        received.type = encoded_buf_type;
+        while ( !v4l2_ioctl(encoder_fd, VIDIOC_DQBUF, &received)) 
+		{
+            if (received.index > encoded_buffers.size())
+				throw std::runtime_error( "bad decoded index");
+
+            auto* encoded = encoded_buffers[received.index].get();
+			string timeString = timeStrings.front();
+			timeStrings.pop_front();
+
+			int encoded_len = received.m.planes[0].bytesused;
+			h264File.write( (char *)encoded->mmap, encoded_len );
+
+            encoded_free.push_back(encoded);
+
+			if ( timeStrings.empty() )
+				more = false;
+
+			if ( !more )
+				break;
+        }
+        if (errno != EAGAIN)
+			throw std::runtime_error( "error receiving encoded buffers" );
+	}
+
+	stopCodec( encoder_fd );
+	delete [] yuv;
+	delete [] jpeg;
+	tjDestroy( handle );
 }
 
 void SentinelCamera::decompressThread()
@@ -2331,6 +2460,24 @@ void runDecoderTest( string path )
 	camera.makeComposite( path );
 }
 
+void runMjpegTest( string path )
+{
+	std::ostringstream oss;
+
+	SentinelCamera camera;
+	camera.mjpegToH264( path );
+
+	string h264Path = path;
+	h264Path.replace(h264Path.find(".mjpeg"),6,".h264");
+
+	string mp4Path = path;
+	mp4Path.replace(mp4Path.find(".mjpeg"),6,".mp4");
+
+	string cmd = "MP4Box -add " + h264Path + " -fps 30 -quiet -new " + mp4Path;
+
+	system( cmd.c_str() );
+}
+
 void runAnalysisTest( string path )
 {
 	SentinelCamera camera;
@@ -2340,6 +2487,7 @@ void runAnalysisTest( string path )
 int main( int argc, char **argv )
 {
 	bool decoder_test = false;
+	bool mjpeg_test = false;
 	bool analysis_test = false;
 	bool socket_interface = false;
 	int frame_count = 300;
@@ -2350,25 +2498,28 @@ int main( int argc, char **argv )
 
 	int opt;
 
-	std::cerr << "Socket: " << socket_name << std::endl;
+	// std::cerr << "Socket: " << socket_name << std::endl;
 
-	while ((opt = getopt(argc, argv, "a:s:d:c:f:n:")) != -1)
+	while ((opt = getopt(argc, argv, "a:s:d:m:c:f:n:")) != -1)
 	{
 		switch ( opt )
 		{
 			case 'a': analysis_test = true; path = optarg; break;
 			case 's': socket_interface = true; socket_name = optarg; break;
 			case 'd': decoder_test = true; path = optarg; break;
+			case 'm': mjpeg_test = true; path = optarg; break;
 			case 'c': frame_count = std::stoi( optarg ); break;
 			case 'f': force_count = std::stoi( optarg ); break;
 			case 'n': noise_level = std::stoi( optarg ); break;
 		}
 	}
 
-	std::cerr << "Socket: " << socket_name << std::endl;
+	// std::cerr << "Socket: " << socket_name << std::endl;
 
 	if ( decoder_test )
 		runDecoderTest( path );
+	else if ( mjpeg_test )
+		runMjpegTest( path );
 	else if ( analysis_test )
 		runAnalysisTest( path );
 	else if ( socket_interface )
