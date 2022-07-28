@@ -8,7 +8,7 @@ The Pi Sentinel software requires the following external programs and libraries:
 
 ```
 sudo apt install libv4l-dev
-sudo apt install libjpeg-dev
+sudo apt install libturbojpeg-dev
 sudo apt install gpac
 sudo apt install libatlas-base-dev
 
@@ -19,7 +19,7 @@ sudo pip3 install --upgrade numpy
 ```
 The `lib4l-dev` install provides the library used to access the camera device and the hardware encoder.
 
-The `libjpeg-dev` install provides the library used to encode and decode JPEG files.
+The `libturbojpeg-dev` install provides the library used to encode and decode JPEG files.
 
 The `gpac` install provides the utility program (MP4Box) used to convert .h264 formatted files to .mp4.
 

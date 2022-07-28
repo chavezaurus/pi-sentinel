@@ -317,7 +317,7 @@ class SentinelServer(object):
             self.gps_time_offset = float(items[2])
             self.funnelCmd("set_gps_time_offset %7.3f" % self.gps_time_offset)
             print(line)
-            time.sleep(10)
+            time.sleep(60)
 
     def funnelCmd( self, cmd ):
         responseQueue = Queue()

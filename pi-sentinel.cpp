@@ -109,7 +109,7 @@ SentinelCamera::SentinelCamera()
 	frameRate = 30.0;
 	gpsTimeOffset = 0.0;
 	force_event = false;
-	dev_name = "/dev/video2";
+	dev_name = "/dev/video0";
 	socket_name = DEFAULT_SOCKET_NAME;
 
 	syncTime();
@@ -388,7 +388,6 @@ void SentinelCamera::decoderThread()
 	maskFrame      = new unsigned char[CHECK_FRAME_SIZE];
 
 	memset(referenceFrame, 0xff, CHECK_FRAME_SIZE);
-	memset(maskFrame, noise_level, CHECK_FRAME_SIZE);
 
 	readMask( maskFrame );
 
@@ -489,16 +488,16 @@ void SentinelCamera::decoderThread()
 
 			unsigned char* dptr = (unsigned char *)decoded->mmap;
 
-			auto start_timer = high_resolution_clock::now();
+			// auto start_timer = high_resolution_clock::now();
 			int sa = signalAmplitude( dptr );
 			zenith_mutex.lock();
     		averageZenithAmplitude = zenithAmplitude( dptr );
 			zenith_mutex.unlock();
 
-			auto stop_timer = high_resolution_clock::now();
-			auto duration = duration_cast<microseconds>(stop_timer - start_timer);	
-			std::cerr << "Duration: " << duration.count() 
-			          << " Amplitude: " << sa << std::endl;
+			// auto stop_timer = high_resolution_clock::now();
+			// auto duration = duration_cast<microseconds>(stop_timer - start_timer);	
+			// std::cerr << "Duration: " << duration.count() 
+			//           << " Amplitude: " << sa << std::endl;
 
 			storageMetas[metaCheckIndex].signalAmplitude = sa;
 
@@ -677,6 +676,24 @@ void SentinelCamera::start()
 {
 	running = true;
 
+    v4l2_format fmt;
+	CLEAR(fmt);
+    fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+	int device_fd = open( dev_name.c_str(), O_RDWR /* required */, 0);
+    if (-1 == xioctl(device_fd, VIDIOC_G_FMT, &fmt))
+		throw std::runtime_error("Error with VIDIOC_G_FMT");
+	close(device_fd);
+
+	if ( fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_H264 )
+		mjpeg = false;
+	else if ( fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_MJPEG )
+		mjpeg = true;
+	else
+	{
+		std::cerr << "Device format not supported." << std::endl;
+		return;
+	}
+
 	metaWriteIndex = 0;
 	metaCheckIndex = 0;
 
@@ -836,6 +853,7 @@ std::vector<std::unique_ptr<MappedBuffer>> SentinelCamera::map_buffers(int fd, v
 void SentinelCamera::readMask( unsigned char* mFrame )
 {
 	std::cerr << "noise_level: " << noise_level << std::endl;
+	memset(mFrame, noise_level, CHECK_FRAME_SIZE);
 
 	const int JPEG_MAX_SIZE = 1000000;
 
@@ -877,10 +895,14 @@ void SentinelCamera::readMask( unsigned char* mFrame )
 	tjDestroy( handle );
 }
 
+
 void SentinelCamera::processMjpeg( string filePath, ProcessType process )
 {
-	const int YUV_SIZE = 1920*1080*3/2;
+	const int YUV_SIZE = 1920*1088*3/2;
 	const int JPEG_MAX_SIZE = 1000000;
+
+	// I know you said .h264 but see if there is really a .mjpeg instead.
+	filePath.replace( filePath.find(".h264"),5,".mjpeg");
 
 	std::ifstream mjpegFile;
 	mjpegFile.open( filePath, std::ios::binary );
@@ -899,8 +921,8 @@ void SentinelCamera::processMjpeg( string filePath, ProcessType process )
 	unsigned char* jpeg = new unsigned char[JPEG_MAX_SIZE];
 	unsigned char* planes[3];
 	planes[0] = yuv;
-	planes[1] = yuv+1920*1080;
-	planes[2] = yuv+1920*1080+1920*1080/4;
+	planes[1] = yuv+1920*1088;
+	planes[2] = yuv+1920*1088+1920*1088/4;
 	
 	for (;;)
 	{
@@ -1040,7 +1062,7 @@ void SentinelCamera::processDecoded( string videoFilePath, ProcessType process )
 				int bytesRead = videoFile.gcount();
 
 				coded->plane.bytesused = bytesRead;
-				std::cerr << "Used: " << videoFile.gcount() << std::endl;
+				// std::cerr << "Used: " << videoFile.gcount() << std::endl;
 			}
 
         	if (v4l2_ioctl(decoder_fd, VIDIOC_QBUF, &coded->buffer))
@@ -1070,7 +1092,7 @@ void SentinelCamera::processDecoded( string videoFilePath, ProcessType process )
 
             auto* decoded = decoded_buffers[received.index].get();
 			more = more && process( decoded->mmap, timeValue );
-			std::cerr << "Time: " << timeValue << std::endl;
+			// std::cerr << "Time: " << timeValue << std::endl;
 
 			// int decoded_len = received.m.planes[0].bytesused;
 
@@ -1305,6 +1327,8 @@ void SentinelCamera::mp4Thread()
 		// std::cerr << oss.str() << std::endl;
 
 		system( oss.str().c_str() );
+		if ( mjpeg )
+			remove( videoPath.c_str() );
 	}
 }
 
@@ -1489,7 +1513,6 @@ void SentinelCamera::decompressThread()
 	maskFrame      = new unsigned char[CHECK_FRAME_SIZE];
 
 	memset(referenceFrame, 0xff, CHECK_FRAME_SIZE);
-	memset(maskFrame, noise_level, CHECK_FRAME_SIZE);
 
 	readMask( maskFrame );
 
@@ -1511,9 +1534,9 @@ void SentinelCamera::decompressThread()
 		StorageMeta sMeta = storageMetas[decompressIndex];
 		unsigned char* jpeg = storage+sMeta.offset;
 		int size = sMeta.size;
-		long int msec = sMeta.timestamp_us / 1000;
+		// long int msec = sMeta.timestamp_us / 1000;
 
-		auto start_timer = high_resolution_clock::now();
+		// auto start_timer = high_resolution_clock::now();
 		int err = tjDecompressToYUVPlanes(handle,jpeg,size,planes,1920,0,1080,0);
 		if ( err < 0 )
 			throw std::runtime_error("Decompress failure");
@@ -1530,9 +1553,9 @@ void SentinelCamera::decompressThread()
 
 		checkCondition.notify_one();
 
-		auto stop_timer = high_resolution_clock::now();
-		auto duration = duration_cast<microseconds>(stop_timer - start_timer);	
-		std::cerr << "Dur: " << duration.count() << " msec: " << msec << " Amp: " << amplitude << std::endl;
+		// auto stop_timer = high_resolution_clock::now();
+		// auto duration = duration_cast<microseconds>(stop_timer - start_timer);	
+		// std::cerr << "Dur: " << duration.count() << " msec: " << msec << " Amp: " << amplitude << std::endl;
 
 		decompressIndex = (decompressIndex+1) % NUM_STORAGE_META;
 	}
@@ -1958,6 +1981,7 @@ void SentinelCamera::makeComposite( string filePath )
 	memset(composeBuffer+1920*1088,128,1920*1088/2);
 
 	processDecoded( filePath, fmax );
+	processMjpeg( filePath, fmax );
 
 	string p = filePath;
 	p.replace(p.find(".h264"),5,".jpg");
@@ -1977,6 +2001,7 @@ void SentinelCamera::makeAnalysis( string filePath )
 {
 	int* averageBuffer = new int[1920*1080];
 	unsigned char* localMaskFrame = new unsigned char[CHECK_FRAME_SIZE];
+	memset(localMaskFrame,noise_level,640*360);
 
 	for ( int i = 0; i < 1920*1080; ++i )
 		averageBuffer[i] = 0;
@@ -2038,6 +2063,7 @@ void SentinelCamera::makeAnalysis( string filePath )
 	readMask( localMaskFrame );
 
 	processDecoded( filePath, add30 );
+	processMjpeg( filePath, add30 );
 
     for ( int iy = 0; iy < 1080; ++iy )
     {
@@ -2063,6 +2089,7 @@ void SentinelCamera::makeAnalysis( string filePath )
     }
 
 	processDecoded( filePath, centroid );
+	processMjpeg( filePath, centroid );
 
 	delete [] averageBuffer;
 	delete [] localMaskFrame;
@@ -2140,6 +2167,7 @@ void SentinelCamera::makeStarChart( string filePath )
 	};
 
 	processDecoded( filePath, delta );
+	processMjpeg( filePath, delta );
 
 	for ( int i = 0; i < 1920*1080; ++i )
 	{
@@ -2462,8 +2490,6 @@ void runDecoderTest( string path )
 
 void runMjpegTest( string path )
 {
-	std::ostringstream oss;
-
 	SentinelCamera camera;
 	camera.mjpegToH264( path );
 
@@ -2476,6 +2502,7 @@ void runMjpegTest( string path )
 	string cmd = "MP4Box -add " + h264Path + " -fps 30 -quiet -new " + mp4Path;
 
 	system( cmd.c_str() );
+	remove( h264Path.c_str() );
 }
 
 void runAnalysisTest( string path )
