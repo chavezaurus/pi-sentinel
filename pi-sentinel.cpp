@@ -651,12 +651,13 @@ void SentinelCamera::syncTime()
 	if ( tspec3.tv_sec == tspec1.tv_sec && (tspec3.tv_nsec-tspec1.tv_nsec) < 100000 )
 	{
 		tspec4.tv_sec = tspec2.tv_sec - tspec1.tv_sec;
-		tspec4.tv_nsec = tspec2.tv_nsec - tspec1.tv_nsec - round(gpsTimeOffset*1.0e9);
-		while ( tspec4.tv_nsec < 0 )
-		{
-			tspec4.tv_nsec += 1000000000;
-			tspec4.tv_sec -= 1;
-		}
+		// std::cerr << "tv_sec before: " << tspec4.tv_sec << std::endl;
+		tspec4.tv_nsec = tspec2.tv_nsec - tspec1.tv_nsec;
+		int seconds = floor(gpsTimeOffset);
+		long int nsecs = (gpsTimeOffset-seconds)*1.0e9;
+
+		tspec4.tv_sec -= seconds;
+		tspec4.tv_nsec -= nsecs;
 
 		while ( tspec4.tv_nsec >= 1000000000 )
 		{
@@ -664,18 +665,20 @@ void SentinelCamera::syncTime()
 			tspec4.tv_sec += 1;
 		}
 
+		while ( tspec4.tv_nsec < 0 )
+		{
+			tspec4.tv_nsec += 1000000000;
+			tspec4.tv_sec -= 1;
+		}
+
 		time_offset_mutex.lock();
 		time_offset = tspec4;
 		time_offset_mutex.unlock();
-
-		// std::cerr << time_offset.tv_sec << " " << time_offset.tv_nsec << std::endl;
 	}
 }
 
 void SentinelCamera::start()
 {
-	running = true;
-
     v4l2_format fmt;
 	CLEAR(fmt);
     fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
@@ -710,6 +713,8 @@ void SentinelCamera::start()
 		decoder_thread = thread( &SentinelCamera::decoderThread, this );
 		archive_thread = thread( &SentinelCamera::archiveThread, this );
 	}
+
+	running = true;
 }
 
 void SentinelCamera::initiateShutdown()
@@ -2359,6 +2364,7 @@ string executeCommand( SentinelCamera& sentinelCamera, std::istringstream& iss )
 		double t_offset;
 		if ( iss >> t_offset )
 		{
+			// std::cerr << "t_offset: " << t_offset << std::endl;
 			sentinelCamera.gpsTimeOffset = t_offset;
 			oss << "OK";
 		}

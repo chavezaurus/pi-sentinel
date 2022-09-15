@@ -13,6 +13,7 @@ delta = 0.0
 lat = 0.0
 lon = 0.0
 current = False
+skipCount = 0
 
 def decode(coord,direction):
     #Converts DDDMM.MMMMM > degrees
@@ -28,15 +29,22 @@ def decode(coord,direction):
 
 def parseGPS(data):
     # print( "raw:", data ) #prints raw data
-    global delta, current, now, lat, lon
+    global delta, current, now, lat, lon, skipCount
     if data[0:6] != '$GNRMC':
         return
 
     # print(data)
+    current = False
     sdata = data.split(",")
     if sdata[2] == 'V':
+        if skipCount > 0:
+            skipCount -= 1
+            return
         print( "no satellite data available", file=sys.stderr, flush=True )
+        skipCount = 60
         return
+    skipCount = 0
+
     # print( "---Parsing GPRMC---", )
     hour = int(sdata[1][0:2])
     minute = int(sdata[1][2:4])
@@ -49,7 +57,7 @@ def parseGPS(data):
 
     measured = datetime(year,month,day,hour,minute,second,hundredths*10000)
     difference = now - measured
-    delta = 0.98*delta + 0.02*difference.total_seconds()
+    delta = 0.9*delta + 0.1*difference.total_seconds()
     
     time = sdata[1][0:2] + ":" + sdata[1][2:4] + ":" + sdata[1][4:6]
     lat = decode(sdata[3],sdata[4]) #latitude
@@ -57,13 +65,11 @@ def parseGPS(data):
     speed = sdata[7]       #Speed in knots
     trCourse = sdata[8]    #True course
     date = sdata[9][0:2] + "/" + sdata[9][2:4] + "/" + sdata[9][4:6]#date
-
-    current = False
  
 def my_callback(which):
-    global now
+    global now, current
     now = datetime.utcnow()
-    current = true
+    current = True
     # print(now)
 
 def readThread():
@@ -77,9 +83,9 @@ def readThread():
     print( "Receiving GPS data", file=sys.stderr )
     while True:
         data = ser.readline()
-        if current != False:
+        if current:
             try:
-                parseGPS(data.decode("utf-8"))
+                parseGPS(data.decode())
             except:
                 current = False
 
