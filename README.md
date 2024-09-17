@@ -11,11 +11,10 @@ sudo apt install libv4l-dev
 sudo apt install libturbojpeg-dev
 sudo apt install gpac
 sudo apt install libatlas-base-dev
+sudo apt install python3-scipy
 
 sudo pip3 install cherrypy
 sudo pip3 install pyephem
-sudo pip3 install scipy
-sudo pip3 install --upgrade numpy
 ```
 The `lib4l-dev` install provides the library used to access the camera device and the hardware encoder.
 
@@ -25,11 +24,11 @@ The `gpac` install provides the utility program (MP4Box) used to convert .h264 f
 
 The `libatlas-base-dev` install provides numerical libraries used to for star ephemeris calculations. 
 
+The `python3-scipy` install provide libraries used to calculate calibration parameters.
+
 The `cherrypy` install provides the Python web server used for the graphical interface.
 
 The `pyephem` install provides routines for calculating star positions used for calibration.
-
-The `scipy` and `numpy` installs provide libraries used to calculate calibration parameters.
 
 ## Hardware 
 

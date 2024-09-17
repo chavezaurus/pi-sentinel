@@ -169,7 +169,7 @@ class SentinelServer(object):
             return
             
         print("Auto exposure at: ", strftime("%Y-%m-%d %H:%M:%S", localtime()))
-        run(['v4l2-ctl', '-d', self.devName, '-c', 'exposure_auto=3'])
+        run(['v4l2-ctl', '-d', self.devName, '-c', 'auto_exposure=3'])
         response = self.funnelCmd("stop")
         if response["response"] != "OK":
             print("Stop failed")
@@ -192,15 +192,15 @@ class SentinelServer(object):
         response = self.funnelCmd("get_frame_rate")
         if float(response["response"]) < 17.0:
             print("Fixed exposure at: ", strftime("%Y-%m-%d %H:%M:%S", localtime()))
-            run(['v4l2-ctl', '-d', self.devName, '-c', 'exposure_auto=1'])
-            run(['v4l2-ctl', '-d', self.devName, '-c', 'exposure_absolute=333'])
+            run(['v4l2-ctl', '-d', self.devName, '-c', 'auto_exposure=1'])
+            run(['v4l2-ctl', '-d', self.devName, '-c', 'exposure_time_absolute=333'])
             run(['v4l2-ctl', '-d', self.devName, '-c', 'gain=0'])
             return
 
         response = self.funnelCmd("get_zenith_amplitude")
         if float(response["response"]) > 230.0:
             print("Auto exposure at: ", strftime("%Y-%m-%d %H:%M:%S", localtime()))
-            run(['v4l2-ctl', '-d', self.devName, '-c', 'exposure_auto=3'])
+            run(['v4l2-ctl', '-d', self.devName, '-c', 'auto_exposure=3'])
 
     def handleSentinelCommand(self,obj):
         cmd = obj['cmd']+"\n"
@@ -233,7 +233,7 @@ class SentinelServer(object):
         usage = 100.0 * (1.0 - stat.f_bavail/stat.f_blocks)
         # print("Percent usage: %7.1f" % usage)
         if usage > self.maxPercentUsage:
-            lst = os.listdir(self.archivePath)
+            lst = [ d for d in os.listdir(self.archivePath) if d.startswith('s')]
             lst.sort()
             if len(lst) >= 2:
                 rmtree(os.path.join(self.archivePath,lst[0]))
@@ -594,11 +594,11 @@ class SentinelServer(object):
         if not f:
             return { "response": "Text file not found"}
 
-        lines = f.readlines()
-        frames = len(lines)
-        r = self.funnelCmd("set_star_movie_frame_count %d" % frames)
-        if r["response"] != "OK":
-            return r
+        # lines = f.readlines()
+        # frames = len(lines)
+        # r = self.funnelCmd("set_star_movie_frame_count %d" % frames)
+        # if r["response"] != "OK":
+        #     return r
 
         r = self.funnelCmd("average %s" % data["path"])
         return r

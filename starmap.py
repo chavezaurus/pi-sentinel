@@ -8,8 +8,8 @@ from os import remove
 def process():
     mountain = timezone("US/Mountain")
     utc = timezone("UTC")
-    start = mountain.localize( datetime(2020,7,29,22,0,0))
-    end   = start + timedelta(hours=6)
+    start = mountain.localize( datetime(2024,8,27,22,0,0))
+    end   = start + timedelta(hours=4)
     delta = timedelta(minutes=60)
 
     headers = {'Content-type': 'application/json'}
@@ -30,7 +30,7 @@ def process():
             break;
 
         utime = start.astimezone(utc)
-        path = utime.strftime("new/s%Y%m%d_%H%M%S.mp4")
+        path = utime.strftime("new/s%Y%m%d_%H%M%S_000.mp4")
         if exists(path):
             remove(path)
         print(path)
@@ -39,11 +39,12 @@ def process():
 
         # Make star chart from long duration playback
         r = post(url2, json=obj2, headers=headers)
+        print(r)
         j = r.json()
         if j["response"] != "OK":
             print(j)
             break;
-
+        
         jpath = path.replace(".mp4",".jpg")
         while not exists(jpath):
             sleep(5)

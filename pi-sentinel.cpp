@@ -2183,7 +2183,7 @@ void SentinelCamera::makeStarChart( string filePath )
 	}
 
 	string p = filePath;
-	p.replace(p.find(".h264"),5,".jpeg");
+	p.replace(p.find(".h264"),5,".jpg");
 
 	encodeJPEG( composeBuffer, p );
 
@@ -2283,6 +2283,18 @@ string executeCommand( SentinelCamera& sentinelCamera, std::istringstream& iss )
 		if ( iss >> path )
 		{
 			std::thread t( &SentinelCamera::makeAnalysis, &sentinelCamera, path );
+			t.detach();
+			oss << "OK";
+		}
+		else
+			oss << "No";
+	}
+	else if ( cmd == "average" )
+	{
+		string path;
+		if ( iss >> path )
+		{
+			std::thread t( &SentinelCamera::makeStarChart, &sentinelCamera, path );
 			t.detach();
 			oss << "OK";
 		}
