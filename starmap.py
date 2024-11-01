@@ -8,9 +8,9 @@ from os import remove
 def process():
     mountain = timezone("US/Mountain")
     utc = timezone("UTC")
-    start = mountain.localize( datetime(2024,8,27,22,0,0))
-    end   = start + timedelta(hours=4)
-    delta = timedelta(minutes=60)
+    start = mountain.localize( datetime(2024,9,9,22,0,0))
+    end   = start + timedelta(hours=6)
+    delta = timedelta(minutes=120)
 
     headers = {'Content-type': 'application/json'}
     address = "http://localhost:9090"

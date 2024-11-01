@@ -145,10 +145,12 @@ public:
     void encodeJPEG(void * mem, const string& fileName );
     void readCalibrationParameters();
     void calibrationFunction();
+    void inverseCalibration();
     void readMask( unsigned char* mask );
     void overlayMask( unsigned char* frame );
+    void overlayCentroids( unsigned char* frame, string fileName );
     void makeComposite( string filePath );
-    void makeAnalysis( string filePath );
+    void makeAnalysis( string filePath, double moonAzim, double moonElev );
     void makeStarChart( string filePath );
     void forceEvent();
     void mjpegToH264( string filePath );

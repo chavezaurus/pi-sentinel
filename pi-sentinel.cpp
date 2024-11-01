@@ -100,8 +100,8 @@ SentinelCamera::SentinelCamera()
 	mjpeg = false;
 	max_frame_count = 0;
 	noise_level = 45;
-	moonx = 0;
-	moony = 0;
+	// moonx = 0;
+	// moony = 0;
 	force_count = 0;
 	sumThreshold = 50;
 	max_events_per_hour = 5;
@@ -1928,6 +1928,57 @@ void SentinelCamera::calibrationFunction()
     calibrationParameters["elev"] = elev;
 }
 
+void SentinelCamera::inverseCalibration()
+{
+	double COPx = calibrationParameters["COPx"];
+	double COPy = calibrationParameters["COPy"];
+	double V = calibrationParameters["V"];
+	double a0 = calibrationParameters["a0"] * M_PI / 180.0;
+
+	// Convert from cardinal North to cardinal South
+	double azim = calibrationParameters["azim"] * M_PI / 180.0 - M_PI;
+	double elev = calibrationParameters["elev"] * M_PI / 180.0;
+
+	// First crude guess
+	double angle = M_PI/2.0 + azim + a0;
+
+	double r = (M_PI/2-elev)/V;
+
+	double px0 =  r * cos(angle) + COPx;
+	double py0 = -r * sin(angle) + COPy;
+
+	double px = px0;
+	double py = py0;
+
+	for ( int i = 0; i < 15; ++i )
+	{
+		calibrationParameters["px"] = px;
+		calibrationParameters["py"] = py;
+
+		calibrationFunction();
+
+		double azimTest = calibrationParameters["azim"] * M_PI / 180.0 - M_PI;
+		double elevTest = calibrationParameters["elev"] * M_PI / 180.0;
+
+		double angle = M_PI/2.0 + azimTest + a0;
+
+		double r = (M_PI/2.0 - elevTest)/V;
+
+		double pxt =  r * cos(angle) + COPx;
+		double pyt = -r * sin(angle) + COPy;
+
+		double dpx = pxt - px0;
+		double dpy = pyt - py0;
+
+		px = px - dpx;
+		py = py - dpy;
+
+		double dsq = dpx*dpx + dpy*dpy;
+		if ( dsq < 1.0e-6 )
+			break;
+	}
+}
+
 void SentinelCamera::overlayMask( unsigned char* frame )
 {
 	unsigned char* localMaskFrame = new unsigned char[CHECK_FRAME_SIZE];
@@ -1955,8 +2006,50 @@ void SentinelCamera::overlayMask( unsigned char* frame )
 	delete [] localMaskFrame;
 }
 
+void SentinelCamera::overlayCentroids( unsigned char* frame, string filePath )
+{
+	string textFilePath = filePath;
+	textFilePath.replace( textFilePath.find(".h264"),5,".csv");
+	std::ifstream textFile;
+	textFile.open( textFilePath );
+	if ( !textFile.is_open() )
+		return;
+
+	string line;
+	while ( std::getline(textFile,line) )
+	{
+		vector<string> tokens;
+
+		std::stringstream ss(line);
+		string item;
+
+		while ( std::getline(ss, item, ',') )
+			tokens.push_back( item );
+
+		double xposition = std::stod( tokens[3] );
+		double yposition = std::stod( tokens[4] );
+		int ix = xposition;
+		int iy = yposition;
+
+		if ( ix == 0 && iy == 0 )
+			continue;
+
+        int indexY = 1920 * iy + ix;
+        int indexU = 1920 * 1088 + 960 * (iy / 2) + (ix / 2);
+        int indexV = indexU + 1920 * 1088 / 4;
+
+		frame[indexY] = 254;
+        frame[indexU] = 0;
+        frame[indexV] = 254;
+	}
+}
+
 void SentinelCamera::makeComposite( string filePath )
 {
+	if ( running )
+		return;
+
+	running = true;
 	unsigned char* composeBuffer = new unsigned char[1920*1088*3/2];
 
 	auto fmax = [&](void* mem, string s) -> bool {	
@@ -1995,15 +2088,21 @@ void SentinelCamera::makeComposite( string filePath )
 	std::cerr << p << std::endl;
 
 	overlayMask(composeBuffer);
+	overlayCentroids(composeBuffer, filePath );
 	p.replace(p.find(".jpg"),4,"m.jpg" );
 	encodeJPEG( composeBuffer, p );
 	std::cerr << p << std::endl;
 
 	delete [] composeBuffer;
+	running = false;
 }
 
-void SentinelCamera::makeAnalysis( string filePath )
+void SentinelCamera::makeAnalysis( string filePath, double moonAzim, double moonElev )
 {
+	if ( running )
+		return;
+
+	running = true;
 	int* averageBuffer = new int[1920*1080];
 	unsigned char* localMaskFrame = new unsigned char[CHECK_FRAME_SIZE];
 	memset(localMaskFrame,noise_level,640*360);
@@ -2066,6 +2165,22 @@ void SentinelCamera::makeAnalysis( string filePath )
 	};
 
 	readMask( localMaskFrame );
+	readCalibrationParameters();
+
+	int moonx = 0;
+	int moony = 0;
+	if ( moonAzim != 0.0 && moonElev != 0.0 )
+	{
+		calibrationParameters["azim"] = moonAzim;
+		calibrationParameters["elev"] = moonElev;
+
+		printf( "MoonAzim %f MoonElev %f\n", moonAzim, moonElev );
+
+		inverseCalibration();
+
+		moonx = calibrationParameters["px"];
+		moony = calibrationParameters["py"];
+	}
 
 	processDecoded( filePath, add30 );
 	processMjpeg( filePath, add30 );
@@ -2104,9 +2219,10 @@ void SentinelCamera::makeAnalysis( string filePath )
 
 	std::ofstream out( txtPath );
 	if ( !out.is_open() )
+	{
+		running = false;
 		return;
-
-	readCalibrationParameters();
+	}
 
 	out.precision(1);
 	for ( unsigned int i = 0; i < timeVector.size(); ++i )
@@ -2133,10 +2249,15 @@ void SentinelCamera::makeAnalysis( string filePath )
 	}
 
 	std::cerr << txtPath << std::endl;
+	running = false;
 }
 
 void SentinelCamera::makeStarChart( string filePath )
 {
+	if ( running )
+		return;
+
+	running = true;
 	int* averageBuffer = new int[1920*1080];
 	unsigned char* composeBuffer = new unsigned char[1920*1088*3/2];
 
@@ -2150,6 +2271,7 @@ void SentinelCamera::makeStarChart( string filePath )
 	if ( !in.is_open() )
 	{
 		std::cerr << "Cannot open: " << textPath << std::endl;
+		running = false;
 		return;
 	}
 
@@ -2189,6 +2311,7 @@ void SentinelCamera::makeStarChart( string filePath )
 
 	delete [] averageBuffer;
 	delete [] composeBuffer;
+	running = false;
 }
 
 void SentinelCamera::forceEvent()
@@ -2280,9 +2403,10 @@ string executeCommand( SentinelCamera& sentinelCamera, std::istringstream& iss )
 	{
 		// std::cout << (sentinelCamera.running ? "=No" : "=OK") << std::endl;
 		string path;
-		if ( iss >> path )
+		double azim, elev;
+		if ( iss >> path >> azim >> elev )
 		{
-			std::thread t( &SentinelCamera::makeAnalysis, &sentinelCamera, path );
+			std::thread t( &SentinelCamera::makeAnalysis, &sentinelCamera, path, azim, elev );
 			t.detach();
 			oss << "OK";
 		}
@@ -2301,18 +2425,19 @@ string executeCommand( SentinelCamera& sentinelCamera, std::istringstream& iss )
 		else
 			oss << "No";
 	}
-	else if ( cmd == "set_moon" )
-	{
-		int mx, my;
-		if ( iss >> mx >> my )
-		{
-			sentinelCamera.moonx = mx;
-			sentinelCamera.moony = my;
-			oss << "OK";
-		}
-		else
-			oss << "No";
-	}
+	// else if ( cmd == "set_moon" )
+	// {
+	// 	int mx, my;
+	// 	if ( iss >> mx >> my )
+	// 	{
+	// 		sentinelCamera.moonx = mx;
+	// 		sentinelCamera.moony = my;
+	// 		printf( "Correct MoonX %d MoonY %d\n", mx, my );
+	// 		oss << "OK";
+	// 	}
+	// 	else
+	// 		oss << "No";
+	// }
 	else if ( cmd == "set_noise" )
 	{
 		int noise;
@@ -2526,7 +2651,7 @@ void runMjpegTest( string path )
 void runAnalysisTest( string path )
 {
 	SentinelCamera camera;
-	camera.makeAnalysis( path );
+	camera.makeAnalysis( path, 0.0, 0.0 );
 }
 
 int main( int argc, char **argv )

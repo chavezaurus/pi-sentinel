@@ -237,6 +237,63 @@ class SentinelServer(object):
             lst.sort()
             if len(lst) >= 2:
                 rmtree(os.path.join(self.archivePath,lst[0]))
+    
+    def moonPosition(self, file_path):
+        f = open("calibration.json")
+        if not f:
+            return
+
+        s = f.read()
+        calibration_data = json.loads(s)
+
+        observer = ephem.Observer()
+        observer.lon = str(calibration_data["cameraLongitude"])
+        observer.lat = str(calibration_data["cameraLatitude"])
+        observer.elevation = calibration_data["cameraElevation"]
+
+        path = os.path.basename(file_path)
+
+        year   = int(path[ 1: 5])
+        month  = int(path[ 5: 7])
+        day    = int(path[ 7: 9])
+        hour   = int(path[10:12])
+        minute = int(path[12:14])
+        second = int(path[14:16])
+
+        date = datetime.datetime(year,month,day,hour,minute,second)
+        observer.date = date
+
+        moon = ephem.Moon(date)
+        moon.compute(observer)
+        azim = 0.0
+        elev = 0.0
+
+        if moon.alt > 0.0:
+            azim = moon.az*180.0/pi
+            elev = moon.alt*180.0/pi
+
+        return azim, elev
+
+    def backgroundAnalyzeAndCompose(self):
+                # Only do this if we are not busy
+        r = self.funnelCmd("get_running")
+        if r["response"] == "Yes":
+            return
+
+        for file in os.listdir("new"):
+            if file.endswith(".h264"):
+                base_name = os.path.splitext(file)[0]
+                csv_path = f"new/{base_name}.csv"
+                jpg_path = f"new/{base_name}.jpg"
+                if not os.path.exists(csv_path):
+                    azim,elev = self.moonPosition( file )
+                    print( f"analyze new/{file} {azim} {elev}" )
+                    r = self.funnelCmd( f"analyze new/{file} {azim} {elev}")
+                    return
+                elif not os.path.exists(jpg_path):
+                    print( f"compose new/{file}" )
+                    r = self.funnelCmd( f"compose new/{file}" )
+                    return
 
     def backgroundProcess(self):
         #Wait for engine to start up
@@ -265,6 +322,8 @@ class SentinelServer(object):
 
                 if self.archivePath != "none":
                     self.pruneArchive()
+
+                self.backgroundAnalyzeAndCompose()
 
             lastTime = tnow
             time.sleep(10)
@@ -608,19 +667,22 @@ class SentinelServer(object):
     @cherrypy.tools.json_out()
     def analyze(self):
         data = cherrypy.request.json
-        moonx = 0
-        moony = 0
+        # moonx = 0
+        # moony = 0
 
-        if "Moon" in data:
-            moonx = data["Moon"][0]
-            moony = data["Moon"][1]
+        # if "Moon" in data:
+        #     moonx = data["Moon"][0]
+        #     moony = data["Moon"][1]
 
-        r = self.funnelCmd("set_moon %d %d" % (moonx,moony) )
-        if r["response"] != "OK":
-            return r
+        # r = self.funnelCmd("set_moon %d %d" % (moonx,moony) )
+        # if r["response"] != "OK":
+        #     return r
 
         path = data["path"]
-        r = self.funnelCmd("analyze %s" % data["path"])
+        azim,elev = self.moonPosition( path )
+        cmd = f"analyze {path} {azim} {elev}"
+        print( cmd )
+        r = self.funnelCmd( f"analyze {path} {azim} {elev}")
         return r
 
     def checkForSync( self, frame ):
