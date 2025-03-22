@@ -346,9 +346,15 @@ int SentinelCamera::signalAmplitude( unsigned char* pstart )
             p += 3;
 
         	int n = *pRef;
-        	n *= 15;
-        	n += c;
-        	n >>= 4;
+
+			if ( c > n )
+				n = c;
+			else
+			{
+        		n *= 15;
+        		n += c;
+        		n >>= 4;
+			}
 
         	*pRef++ = n;
         }

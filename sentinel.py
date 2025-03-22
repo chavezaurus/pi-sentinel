@@ -132,19 +132,27 @@ def TotalCalibrationError(calVector, skyList ):
     # print("Sum: %f" % sum)
     return sum
 
+def round_to_nearest_5_minutes(dt, round_down=True):
+    minutes = dt.minute
+    rounded_minutes = (minutes // 5) * 5 if round_down else ((minutes + 4) // 5) * 5
+    return dt.replace(minute=rounded_minutes, second=0, microsecond=0)
+
 class SentinelServer(object):
 
     def __init__(self):
         self.sentinelSocket = None
         self.cmdQueue = Queue()
-        self.startTime = "21:30"
-        self.stopTime  = "05:00"
+        self.startTime = {"h": 21, "m": 30 }
+        self.stopTime  = {"h": 5, "m": 0 }
+        self.startUTC = {"h": 21, "m": 30 }
+        self.stopUTC = {"h": 5, "m": 0 }
         self.archivePath = "none"
         self.devName = "/dev/video2"
         self.maxPercentUsage = 90.0
         self.gps_latitude = 0.0
         self.gps_longitude = 0.0
         self.gps_time_offset = 0.0
+        self.analyze_and_compose = False
 
         if not os.path.exists("new"):
             os.mkdir("new")
@@ -280,6 +288,7 @@ class SentinelServer(object):
         if r["response"] == "Yes":
             return
 
+        self.analyze_and_compose = False
         for file in os.listdir("new"):
             if file.endswith(".h264"):
                 base_name = os.path.splitext(file)[0]
@@ -289,10 +298,12 @@ class SentinelServer(object):
                     azim,elev = self.moonPosition( file )
                     print( f"analyze new/{file} {azim} {elev}" )
                     r = self.funnelCmd( f"analyze new/{file} {azim} {elev}")
+                    self.analyze_and_compose = True
                     return
                 elif not os.path.exists(jpg_path):
                     print( f"compose new/{file}" )
                     r = self.funnelCmd( f"compose new/{file}" )
+                    self.analyze_and_compose = True
                     return
 
     def backgroundProcess(self):
@@ -300,7 +311,7 @@ class SentinelServer(object):
         while cherrypy.engine.state != cherrypy.engine.states.STARTED:
             time.sleep(1)
 
-        lastTime = 'XX:XX'
+        last_time = datetime.time(hour=0,minute=0)
         try:
             f = open("state.json")
             s = f.read()
@@ -311,21 +322,28 @@ class SentinelServer(object):
 
         while cherrypy.engine.state == cherrypy.engine.states.STARTED:
             #Check for timed actions
-            tnow = time.strftime('%H:%M')
-            if tnow != lastTime:
-                if tnow == self.startTime and self.startTime != self.stopTime:
+            utc_now = datetime.datetime.now(datetime.timezone.utc).time()
+            utc_now = utc_now.replace(second=0, microsecond=0)
+            if utc_now != last_time:
+                tstart = datetime.time(hour=self.startUTC["h"], minute=self.startUTC["m"])
+                tstop = datetime.time(hour=self.stopUTC["h"], minute=self.stopUTC["m"])
+                
+                if tstart == utc_now and tstart != tstop:
                     self.runStartSequence()
-                elif tnow == self.stopTime and self.startTime != self.stopTime:
+                elif tstop == utc_now and tstart != tstop:
                     self.runStopSequence()
+                    self.analyze_and_compose = True
                 else:
                     self.checkExposure()
+
+                last_time = utc_now
 
                 if self.archivePath != "none":
                     self.pruneArchive()
 
+            if self.analyze_and_compose:
                 self.backgroundAnalyzeAndCompose()
 
-            lastTime = tnow
             time.sleep(10)
 
     def commProcess(self):
@@ -535,8 +553,10 @@ class SentinelServer(object):
             response["devName"] = r["response"]
             r = self.funnelCmd("get_archive_path")
             response["archivePath"] = r["response"]
-            response["startTime"] = {"h": int(self.startTime[0:2]), "m": int(self.startTime[3:5])}
-            response["stopTime"]  = {"h": int(self.stopTime[0:2]),  "m": int(self.stopTime[3:5])}
+            response["startTime"] = self.startTime
+            response["stopTime"]  = self.stopTime
+            response["startUTC"] = self.startUTC
+            response["stopUTC"]  = self.stopUTC
             response["numNew"]     = len(glob.glob("new/*.mp4"))
             response["numSaved"]   = len(glob.glob("saved/*.mp4"))
             response["numTrashed"] = len(glob.glob("trash/*.mp4"))
@@ -566,10 +586,10 @@ class SentinelServer(object):
         r = self.funnelCmd("set_archive_path %s" % data["archivePath"])
         if r["response"] != "OK":
             return r
-        start = data["startTime"]
-        stop = data["stopTime"]
-        self.startTime = "%02d:%02d" % (start["h"],start["m"])
-        self.stopTime  = "%02d:%02d" % (stop["h"], stop["m"])
+        self.startTime = data["startTime"]
+        self.stopTime  = data["stopTime"]
+        self.startUTC = data.get("startUTC", self.startTime)
+        self.stopUTC = data.get("stopUTC", self.stopTime)
         self.devName = data["devName"]
         self.archivePath = data["archivePath"]
 
@@ -606,6 +626,8 @@ class SentinelServer(object):
             s = json.dumps(data,sort_keys=True, indent=4)
             f.write(s)
             f.close()
+        else:
+            print("Cannot open f")
 
         return { "response": "OK" }
 
@@ -667,16 +689,6 @@ class SentinelServer(object):
     @cherrypy.tools.json_out()
     def analyze(self):
         data = cherrypy.request.json
-        # moonx = 0
-        # moony = 0
-
-        # if "Moon" in data:
-        #     moonx = data["Moon"][0]
-        #     moony = data["Moon"][1]
-
-        # r = self.funnelCmd("set_moon %d %d" % (moonx,moony) )
-        # if r["response"] != "OK":
-        #     return r
 
         path = data["path"]
         azim,elev = self.moonPosition( path )
@@ -806,6 +818,42 @@ class SentinelServer(object):
     @cherrypy.expose
     @cherrypy.tools.json_in()
     @cherrypy.tools.json_out()
+    def recalc_start_stop_times(self):
+        data = cherrypy.request.json
+        
+        # Create an observer object
+        observer = ephem.Observer()
+
+        # Set the observer's location (latitude and longitude)
+        observer.lat = str(data["lat"])
+        observer.lon = str(data["lon"])
+
+        # Set the date to the current UTC time
+        observer.date = ephem.now()
+
+        # Create a Sun object
+        sun = ephem.Sun()
+
+        twilight = data["twilight"]
+
+        sunset = observer.next_setting(sun)
+        sunset_datetime = sunset.datetime()
+        time_on = sunset_datetime + datetime.timedelta(minutes=twilight)
+        time_on = round_to_nearest_5_minutes( time_on, False )
+
+        sunrise = observer.next_rising(sun)
+        sunrise_datetime = sunrise.datetime()
+        time_off = sunrise_datetime - datetime.timedelta(minutes=twilight)
+        time_off = round_to_nearest_5_minutes( time_off, True )
+
+        startUTC = { "h": time_on.hour, "m": time_on.minute }
+        stopUTC = { "h": time_off.hour, "m": time_off.minute }
+
+        return { "response": "OK", "startUTC": startUTC, "stopUTC": stopUTC }
+
+    @cherrypy.expose
+    @cherrypy.tools.json_in()
+    @cherrypy.tools.json_out()
     def stars(self):
         starList = [ "Sirius", "Canopus", "Rigil Kentaurus", "Arcturus", "Vega", "Capella", "Rigel", "Procyon",
                      "Achernar", "Betelgeuse", "Hadar", "Altair", "Acrux", "Aldebaran", "Antares", "Spica", "Pollux", "Fomalhaut",
@@ -817,6 +865,9 @@ class SentinelServer(object):
         observer.lon = str(data["cameraLongitude"])
         observer.lat = str(data["cameraLatitude"])
         observer.elevation = data["cameraElevation"]
+
+        if not data["path"]:
+            return { "response": "OK", "sky_objects": [] }
 
         path = os.path.basename(data["path"])
 
@@ -876,6 +927,21 @@ class SentinelServer(object):
             result.append( {"name": "Moon", "azim": azim, "elev": elev} )
 
         return { "response": "OK", "sky_objects": result }
+
+    @cherrypy.expose
+    @cherrypy.tools.json_in()
+    @cherrypy.tools.json_out()
+    def save_sky_objects(self):
+        print( "save_sky_objects" )
+        data = cherrypy.request.json
+        sky_object_list = data["sky_object_list"]
+        f = open("sky_list.json","w")
+        if f:
+            s = json.dumps(sky_object_list,indent=4)
+            f.write(s)
+            f.close()
+
+        return { "response": "OK" }
 
     @cherrypy.expose
     @cherrypy.tools.json_in()

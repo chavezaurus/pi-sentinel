@@ -27,7 +27,9 @@ var sentinelState = {
     numTrashed: 0,
     gpsLatitude: 0,
     gpsLongitude: 0,
-    gpsTimeOffset: 0
+    gpsTimeOffset: 0,
+    startUTC: { h: 21, m: 0},
+    stopUTC: { h: 5, m: 30 }
 };
 
 var playbackState = {
@@ -279,8 +281,6 @@ let Dropdown = {
         let jpgObj = videoPoster !== null ? {href: videoPoster, download: basename(videoPoster)} : {href: "#"};
         let csvObj = csvFilePath !== null ? {href: csvFilePath, download: basename(csvFilePath)} : {href: "#"};
 
-        console.log(csvObj);
-
         return m("div.dropdown", [
             m("button.pure-button", {id: "mydrop", onclick: function(){showDropdown=!showDropdown;}}, "Actions"),
             m(c, [
@@ -292,7 +292,8 @@ let Dropdown = {
                 m("a.dropdown-item", vidObj, "Get Video"),
                 m("a.dropdown-item", jpgObj, "Get Image"),
                 m("a.dropdown-item", csvObj, "Get CSV File"),
-                m(compoClass, {href: "#", onclick: SelfTest }, "Self Test")
+                m(compoClass, {href: "#", onclick: SelfTest }, "Self Test"),
+                m(compoClass, {href: "#", onclick: () => (NumberDialog.isOpen = true) }, "Recalc Times")
             ])
         ])
     }
@@ -335,7 +336,8 @@ let DoHeader = {
             m(starsClass, {onclick: function() {
                 paneSelect = "stars";
                 RequestSkyObjects();
-            }}, "Starlist")
+            }}, "Starlist"),
+            m(NumberDialog)
         ])
     }
 };
@@ -372,11 +374,31 @@ let DoCalibration = function() {
     })
 };
 
+let SaveSkyObjects = function() {
+    m.request({
+        method: "POST",
+        url: "save_sky_objects",
+        body: { "sky_object_list": skyObjectList }
+    })
+    .then( function(result) {
+        if ( result.response !== "OK" ) {
+            alert( result.response );
+        }
+    })
+    .catch(function(e) {
+        console.log( e.code );
+    })
+};
+
 let DoSkyTable = {
     view: function() {
         return m("div", [
             m("button.pure-button", {onclick: DoCalibration}, "Do Calibration"),
-            m("button.pure-button", {onclick: function() {skyObjectList=[]}}, "Clear All")
+            m("button.pure-button", {onclick: UpdateStars}, "Update Stars"),
+            m("button.pure-button", {onclick: function() {
+                skyObjectList=[];
+                SaveSkyObjects();
+            }}, "Clear All")
         ])
     }
 };
@@ -432,6 +454,8 @@ let MakeComposite = function() {
     .then( function(result) {
         if ( result.response !== "OK") {
             alert( "Cannot make composite while running");
+        } else {
+            setTimeout( WaitForCompletion, 3000 )
         }
     })
     .catch(function(e) {
@@ -454,6 +478,8 @@ let MakeAverage = function() {
     .then( function(result) {
         if ( result.response !== "OK") {
             alert( "Cannot make average while running");
+        } else {
+            setTimeout( WaitForCompletion, 3000 )
         }
     })
     .catch(function(e) {
@@ -485,6 +511,7 @@ let Analyze = function() {
             alert( "Cannot analyze while running");
         } else {
             csvFilePath = videoSource.replace(".mp4",".csv");
+            setTimeout( WaitForCompletion, 3000 )
         }
     })
     .catch(function(e) {
@@ -646,6 +673,7 @@ let HandleCanvasClick = function(e) {
 
     if ( r ) {
         skyObjectList.push( {px: rx, py: ry, name: nearest.name, file: videoPoster, azim: nearest.azim, elev: nearest.elev} );
+        SaveSkyObjects()
     }
 };
 
@@ -667,6 +695,33 @@ let CalibrateImage = {
             })
         ])
     }
+};
+
+var NumberDialog = {
+    // State to manage the visibility of the dialog and the input value
+    isOpen: false,
+    value: 30,
+    onSubmit: function() {
+        RecalcStartStopTimes( NumberDialog.value )
+        NumberDialog.isOpen = false; // Close the dialog after submission
+    },
+    view: function() {
+        return NumberDialog.isOpen
+            ? m(".modal-overlay", [
+                  m(".modal", [
+                      m("h2", "Minutes of Twilight"),
+                      m("input[type=number]", {
+                          value: NumberDialog.value,
+                          oninput: function(e) {
+                              NumberDialog.value = e.target.value;
+                          },
+                      }),
+                      m("button", { onclick: NumberDialog.onSubmit }, "Submit"),
+                      m("button", { onclick: () => (NumberDialog.isOpen = false) }, "Cancel"),
+                  ]),
+              ])
+            : null; // Render nothing if the dialog is closed
+    },
 };
 
 let Table = {
@@ -715,6 +770,39 @@ let SkyTable = {
     }
 };
 
+let localHourMinuteToUTC = function( local ) {
+    const now = new Date();
+    now.setHours(local.h, local.m, 0, 0);
+    return { "h": now.getUTCHours(), "m": now.getUTCMinutes() };
+};
+
+let utcToLocalHourMinute = function( utc ) {
+    const now = new Date();
+    now.setUTCHours(utc.h, utc.m, 0, 0);
+    return { "h": now.getHours(), "m": now.getMinutes() };
+};
+
+let RecalcStartStopTimes = function( twilight ) {
+    let body = {"twilight": twilight, "lat": calibrationState.cameraLatitude, "lon": calibrationState.cameraLongitude };
+
+    m.request({
+        method: "POST",
+        url: "recalc_start_stop_times",
+        body: body
+    })
+    .then(function(result) {
+        if ( result.response != "OK" ) {
+            alert("RecalcStartStopTimes failed");
+        } else {
+            sentinelState.startTime = utcToLocalHourMinute(result.startUTC);
+            sentinelState.stopTime = utcToLocalHourMinute(result.stopUTC);
+        }
+    })
+    .catch(function(e) {
+        console.log( e.code );
+    })
+};
+
 let SubmitControls = function() {
     if ( sentinelState.archivePath === "" ) {
         sentinelState.archivePath = "none";
@@ -724,6 +812,9 @@ let SubmitControls = function() {
         sentinelState.devName = "/dev/video2";
     }
 
+    sentinelState["startUTC"] = localHourMinuteToUTC( sentinelState.startTime );
+    sentinelState["stopUTC"] = localHourMinuteToUTC( sentinelState.stopTime );
+
     m.request({
         method: "POST",
         url: "set_state",
@@ -732,6 +823,23 @@ let SubmitControls = function() {
     .then(function(result) {
         if ( result.response != "OK") {
             alert("Submit failed");
+        } else {
+            sentinelState.startTime = utcToLocalHourMinute(result.startUTC);
+            sentinelState.stopTime = utcToLocalHourMinute(result.stopUTC);
+        }
+    })
+    .catch(function(e) {
+        console.log( e.code );
+    })
+};
+
+let WaitForCompletion = function() {
+    m.request({url: "get_running"})
+    .then(function(result) {
+        if ( result.response === "Yes" ) {
+            setTimeout( WaitForCompletion, 3000 );
+        } else {
+            alert( "Action Completed" );
         }
     })
     .catch(function(e) {
@@ -746,6 +854,8 @@ let RequestControls = function() {
             alert( "Get State failed");
         } else {
             sentinelState = result;
+            sentinelState.startTime = utcToLocalHourMinute( result.startUTC );
+            sentinelState.stopTime = utcToLocalHourMinute( result.stopUTC );
         }
     })
     .catch(function(e) {
