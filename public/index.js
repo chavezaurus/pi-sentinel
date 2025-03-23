@@ -687,7 +687,7 @@ let CalibrateImage = {
                 oncreate: function(vnode) {
                     canvasContext = vnode.dom.getContext("2d");
                     canvasImage.src = videoPoster;
-                    UpdateStars();
+                    setTimeout( UpdateStars, 200);
                 },
                 onremove: function() {
                     canvasContext = null;
@@ -783,7 +783,7 @@ let utcToLocalHourMinute = function( utc ) {
 };
 
 let RecalcStartStopTimes = function( twilight ) {
-    let body = {"twilight": twilight, "lat": calibrationState.cameraLatitude, "lon": calibrationState.cameraLongitude };
+    let body = {"twilight": Number(twilight), "lat": calibrationState.cameraLatitude, "lon": calibrationState.cameraLongitude };
 
     m.request({
         method: "POST",
@@ -935,10 +935,18 @@ let ForceTrigger = function() {
 
 let SubmitPlayback = function()
 {
+    const localDate = new Date( playbackState.year, playbackState.month, playbackState.day,
+                                playbackState.hour, playbackState.minute, playbackState.second );
+    
+    const body = { "year": localDate.getUTCFullYear(), "month": localDate.getUTCMonth(),
+                   "day": localDate.getUTCDate(), "hour": localDate.getUTCHours(),
+                   "minute": localDate.getUTCMinutes(), "second": localDate.getUTCSeconds(),
+                   "duration": playbackState.duration };
+
     m.request({
         method: "POST",
         url: "playback",
-        body: playbackState
+        body: body
     })
     .then(function(result) {
         if ( result.response != "OK") {

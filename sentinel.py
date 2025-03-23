@@ -719,32 +719,29 @@ class SentinelServer(object):
             return { "response": "No archive path"}
 
         data = cherrypy.request.json
-        localTime = datetime.datetime(data["year"], data["month"], data["day"],
-                               data["hour"], data["minute"], data["second"])
-        dt = localTime.astimezone()
+        utcTime = datetime.datetime(data["year"], data["month"], data["day"],
+                               data["hour"], data["minute"], data["second"],
+                               tzinfo=datetime.timezone.utc)
 
-        t0 = dt.timestamp()
-        tm = t0 - 2
-        tp = t0 + data["duration"] + 1
+        tm = utcTime - datetime.timedelta(seconds=2)
+        tp = utcTime + datetime.timedelta(seconds=data["duration"] + 1)
 
-        tm_string = datetime.datetime.utcfromtimestamp(tm).strftime("%Y%m%d_%H%M%S_000")
-        tp_string = datetime.datetime.utcfromtimestamp(tp).strftime("%Y%m%d_%H%M%S_000")
+        tm_string = tm.strftime("%Y%m%d_%H%M%S_000")
+        tp_string = tp.strftime("%Y%m%d_%H%M%S_000")
 
         l = []
 
-        while tm < tp+60:
-            dtt = datetime.datetime.utcfromtimestamp(tm)
-            path0 = self.archivePath + "/s" + dtt.strftime("%Y%m%d_%H") 
-            path0 += "/s" + dtt.strftime("%Y%m%d_%H%M") + ".h264"
+        while tm < tp+datetime.timedelta(seconds=60):
+            path0 = self.archivePath + "/s" + tm.strftime("%Y%m%d_%H") 
+            path0 += "/s" + tm.strftime("%Y%m%d_%H%M") + ".h264"
             if path0 not in l and os.path.exists(path0) and os.path.exists(path0.replace(".h264",".txt")):
                 l.append(path0)
-            tm = tm + 60
+            tm = tm + datetime.timedelta(seconds=60)
 
         if len(l) == 0:
             return { "response": "Archive file not found"}
 
-        utc = datetime.datetime.utcfromtimestamp(t0)
-        playbackPath = utc.strftime("new/s%Y%m%d_%H%M%S_000.h264")
+        playbackPath = utcTime.strftime("new/s%Y%m%d_%H%M%S_000.h264")
 
         pbv = None
         pbt = None
@@ -846,10 +843,10 @@ class SentinelServer(object):
         time_off = sunrise_datetime - datetime.timedelta(minutes=twilight)
         time_off = round_to_nearest_5_minutes( time_off, True )
 
-        startUTC = { "h": time_on.hour, "m": time_on.minute }
-        stopUTC = { "h": time_off.hour, "m": time_off.minute }
+        self.startUTC = { "h": time_on.hour, "m": time_on.minute }
+        self.stopUTC = { "h": time_off.hour, "m": time_off.minute }
 
-        return { "response": "OK", "startUTC": startUTC, "stopUTC": stopUTC }
+        return { "response": "OK", "startUTC": self.startUTC, "stopUTC": self.stopUTC }
 
     @cherrypy.expose
     @cherrypy.tools.json_in()
