@@ -1329,11 +1329,17 @@ void SentinelCamera::mp4Thread()
 			mjpegToH264( base+".mjpeg");
 
 		string videoPath = base + ".h264";
+		string mp4Path = base + ".mp4";
 
 		// Make .mp4 file from .h264 file
-		oss << "MP4Box -add " << videoPath 
-			<< " -fps " << iFrameRate 
-			<< " -quiet -new " << base << ".mp4";
+		
+		// oss << "MP4Box -add " << videoPath 
+		// 	<< " -fps " << iFrameRate 
+		// 	<< " -quiet -new " << base << ".mp4";
+
+		oss << "ffmpeg -hide_banner -loglevel error "
+		    << " -r " << iFrameRate << " -i " << videoPath
+			<< " -vcodec copy " << mp4Path;
 
 		// std::cerr << oss.str() << std::endl;
 
