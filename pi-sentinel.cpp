@@ -1336,7 +1336,7 @@ void SentinelCamera::mp4Thread()
 
 		std::string command = "which MP4Box >/dev/null 2>&1";
 		int result = system(command.c_str());
-		if (result != 0)
+		if (result == 0)
 		{
 			oss << "MP4Box -add " << videoPath 
 				<< " -fps " << iFrameRate 
