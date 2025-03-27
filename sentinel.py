@@ -808,8 +808,10 @@ class SentinelServer(object):
             framesPerSecond = int(round((count-1)/duration))
 
         mp4File = playbackPath.replace(".h264",".mp4")
-        # pid = Popen(["MP4Box", "-add", playbackPath, "-fps", "%d" % framesPerSecond, "-quiet", "-new", mp4File]).pid
-        Popen(["ffmpeg", "-hide_banner", "-loglevel", "error", "-r", f"{framesPerSecond}", "-i", f"{playbackPath}", "-vcodec", 
+        try:
+            pid = Popen(["MP4Box", "-add", playbackPath, "-fps", "%d" % framesPerSecond, "-quiet", "-new", mp4File]).pid
+        except FileNotFoundError:
+            Popen(["ffmpeg", "-hide_banner", "-loglevel", "error", "-r", f"{framesPerSecond}", "-i", f"{playbackPath}", "-vcodec", 
                 "copy", mp4File])
         return { "response": "OK"}
 

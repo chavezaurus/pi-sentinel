@@ -16,6 +16,7 @@
 #include <turbojpeg.h>
 #include <math.h>
 #include <list>
+#include <filesystem>
 
 #include "pi-sentinel.hpp"
 
@@ -109,7 +110,7 @@ SentinelCamera::SentinelCamera()
 	frameRate = 30.0;
 	gpsTimeOffset = 0.0;
 	force_event = false;
-	dev_name = "/dev/video0";
+	dev_name = "/dev/video2";
 	socket_name = DEFAULT_SOCKET_NAME;
 
 	syncTime();
@@ -1332,14 +1333,21 @@ void SentinelCamera::mp4Thread()
 		string mp4Path = base + ".mp4";
 
 		// Make .mp4 file from .h264 file
-		
-		// oss << "MP4Box -add " << videoPath 
-		// 	<< " -fps " << iFrameRate 
-		// 	<< " -quiet -new " << base << ".mp4";
 
-		oss << "ffmpeg -hide_banner -loglevel error "
-		    << " -r " << iFrameRate << " -i " << videoPath
-			<< " -vcodec copy " << mp4Path;
+		std::string command = "which MP4Box >/dev/null 2>&1";
+		int result = system(command.c_str());
+		if (result != 0)
+		{
+			oss << "MP4Box -add " << videoPath 
+				<< " -fps " << iFrameRate 
+				<< " -quiet -new " << base << ".mp4";
+		}
+		else 
+		{
+			oss << "ffmpeg -hide_banner -loglevel error "
+		    	<< " -r " << iFrameRate << " -i " << videoPath
+				<< " -vcodec copy " << mp4Path;
+		}
 
 		// std::cerr << oss.str() << std::endl;
 
