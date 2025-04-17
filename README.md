@@ -13,7 +13,7 @@ HD 2mp for Automatic Vending Machines
 Black (25 Feet, 7.62 Meters)
 * WAVLINK USB 3.0 to SATA External Hard Drive Docking Station with 2USB 3.0 HUB and TF & SD Card for 2.5 inch/3.5 Inch HDD
 * Power Supply - CanaKit USB-C Power Supply
-* GPS Module - BN-280 GPS Module NMEA-0183 TTL Level Dual Glonass GPS with 1PPS Flash for Arduino Pixhawk Aircraft Flight Control FPV Freestyle Drone Quadcopter RC Airplanes APM 2.8
+* GPS Module - BE-280 GPS Module M10050 Chip with Ceramic Antenna Positioning Tracking TTL Level 38400bps Beidou GPS Antenna for Arduino Raspberry Pi Aircraft Pixhawk APM Flight Controller
 
 The camera has a fisheye lens but the full sky image is somewhat cropped at the top and bottom. 
 
@@ -23,11 +23,11 @@ I am using a Hard Drive Docking station that lets me attach a 1TB SATA hard driv
 
 The GPS module provides serial timing information and a 1 pulse-per-second sync pulse.  These are used to improve the timing accuracy of the measurements.  The GPS module cable wires are connected to the Raspberry Pi GPIO connector as follows:
 
-* GPS Pin 1: 1PPS --- RPi GPIO 4 (GPCLK0) Pin 7
+* GPS Pin 1: 1PPS --- RPi GPIO 13 (PWM1) Pin 33
 * GPS Pin 2: Gnd  --- RPi Ground Pin 6
 * GPS Pin 3: Tx   --- Rpi GPIO 15 (UART RX) Pin 10
 * GPS Pin 4: Rx   --- 
-* GPS Pin 5: VCC  --- Rpi 3v3 Power Pin 1
+* GPS Pin 5: VCC  --- Rpi 5V Power Pin 2
 * GPS Pin 6: Boot ---
 
 The GPS module also provides a red flashing light coincident with the 1PPS signal that serves as a visual indication that the module is working correctly.  

@@ -75,7 +75,7 @@ def my_callback(which):
 def readThread():
     global current
     try:
-        ser = serial.Serial(port, baudrate = 9600, timeout = 0.5)
+        ser = serial.Serial(port, baudrate = 38400, timeout = 0.5)
     except:
         print("GPS Port not available", file=sys.stderr)
         return
@@ -100,8 +100,8 @@ except OSError:
         exit()
 
 GPIO.setmode(GPIO.BCM)
-GPIO.setup(4,GPIO.IN)
-GPIO.add_event_detect( 4,GPIO.RISING,callback=my_callback,bouncetime=100)
+GPIO.setup(13,GPIO.IN,pull_up_down=GPIO.PUD_DOWN)
+GPIO.add_event_detect( 13,GPIO.RISING,callback=my_callback,bouncetime=100)
 
 gps = Thread(target = readThread)
 gps.daemon = True
