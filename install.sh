@@ -17,6 +17,3 @@ sudo apt-get install rename;
 sudo apt-get install -y ntp;
 
 make
-
-## give a reminder
-echo "Don't forget to do UART from the Raspberry Pi config!"

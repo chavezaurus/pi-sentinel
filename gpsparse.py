@@ -30,9 +30,10 @@ def decode(coord,direction):
 def parseGPS(data):
     # print( "raw:", data ) #prints raw data
     global delta, current, now, lat, lon, skipCount
-    if data[0:6] != '$GNRMC':
+    if data[0:6] != '$GPRMC':
         return
 
+    now = datetime.utcnow()
     # print(data)
     current = False
     sdata = data.split(",")
@@ -89,6 +90,14 @@ def readThread():
             except:
                 current = False
 
+def readThread2():
+    try:
+        with serial.Serial(port = '/dev/ttyACM0', timeout=1) as ser:
+            while True:
+                line = ser.readline().decode('ascii', errors='replace').strip()
+                parseGPS(line)
+    except serial.SerialException as e:
+        print(f"Could not open serial port {port}: {e}")
 
 server_address = '/tmp/sentinel_time.sock'
 
@@ -103,7 +112,7 @@ GPIO.setmode(GPIO.BCM)
 GPIO.setup(13,GPIO.IN,pull_up_down=GPIO.PUD_DOWN)
 GPIO.add_event_detect( 13,GPIO.RISING,callback=my_callback,bouncetime=100)
 
-gps = Thread(target = readThread)
+gps = Thread(target = readThread2)
 gps.daemon = True
 gps.start()
 
