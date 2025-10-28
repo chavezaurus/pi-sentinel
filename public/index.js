@@ -846,6 +846,7 @@ let utcToLocalHourMinute = function( utc ) {
 };
 
 let RecalcStartStopTimes = function( twilight ) {
+    RequestCalibration();
     let body = {"twilight": Number(twilight), "lat": calibrationState.cameraLatitude, "lon": calibrationState.cameraLongitude };
 
     m.request({
@@ -998,8 +999,9 @@ let ForceTrigger = function() {
 
 let SubmitPlayback = function()
 {
-    const localDate = new Date( playbackState.year, playbackState.month, playbackState.day,
-                                playbackState.hour, playbackState.minute, playbackState.second );
+    var localDate = new Date();
+    localDate.setFullYear(playbackState.year, playbackState.month, playbackState.year );
+    localDate.setHours(playbackState.hour, playbackState.minute, playbackState.second );
     
     const body = { "year": localDate.getUTCFullYear(), "month": localDate.getUTCMonth(),
                    "day": localDate.getUTCDate(), "hour": localDate.getUTCHours(),

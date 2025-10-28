@@ -1004,6 +1004,9 @@ void SentinelCamera::processDecoded( string videoFilePath, ProcessType process )
 		sizeVector.push_back( frameSize );
 	}
 
+	if ( timeVector.size() <= 30 )
+		return;
+
 	int decoder_fd;
 	createDecoder( decoder_fd );
 
