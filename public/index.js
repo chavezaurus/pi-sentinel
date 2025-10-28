@@ -157,52 +157,115 @@ let PixelToAzEl = function( px, py ){
     return obj;
 }
 
+function nelderMead2D(f, initial, step = 1, tol = 1e-6, maxIter = 200) {
+    // Create simplex: three points for 2D
+    let simplex = [
+        [initial[0], initial[1]],
+        [initial[0] + step, initial[1]],
+        [initial[0], initial[1] + step]
+    ];
+    let values = simplex.map(p => f(p));
+
+    for (let iter = 0; iter < maxIter; iter++) {
+        // Sort simplex by function value
+        let idx = [0, 1, 2].sort((a, b) => values[a] - values[b]);
+        simplex = idx.map(i => simplex[i]);
+        values = idx.map(i => values[i]);
+
+        // Centroid of best two
+        let centroid = [
+            (simplex[0][0] + simplex[1][0]) / 2,
+            (simplex[0][1] + simplex[1][1]) / 2
+        ];
+
+        // Reflection
+        let reflected = [
+            centroid[0] + (centroid[0] - simplex[2][0]),
+            centroid[1] + (centroid[1] - simplex[2][1])
+        ];
+        let reflectedValue = f(reflected);
+
+        if (reflectedValue < values[1]) {
+            // Expansion
+            let expanded = [
+                centroid[0] + 2 * (centroid[0] - simplex[2][0]),
+                centroid[1] + 2 * (centroid[1] - simplex[2][1])
+            ];
+            let expandedValue = f(expanded);
+            if (expandedValue < reflectedValue) {
+                simplex[2] = expanded;
+                values[2] = expandedValue;
+            } else {
+                simplex[2] = reflected;
+                values[2] = reflectedValue;
+            }
+        } else if (reflectedValue < values[2]) {
+            simplex[2] = reflected;
+            values[2] = reflectedValue;
+        } else {
+            // Contraction
+            let contracted = [
+                centroid[0] + 0.5 * (simplex[2][0] - centroid[0]),
+                centroid[1] + 0.5 * (simplex[2][1] - centroid[1])
+            ];
+            let contractedValue = f(contracted);
+            if (contractedValue < values[2]) {
+                simplex[2] = contracted;
+                values[2] = contractedValue;
+            } else {
+                // Shrink
+                simplex[1] = [
+                    simplex[0][0] + 0.5 * (simplex[1][0] - simplex[0][0]),
+                    simplex[0][1] + 0.5 * (simplex[1][1] - simplex[0][1])
+                ];
+                simplex[2] = [
+                    simplex[0][0] + 0.5 * (simplex[2][0] - simplex[0][0]),
+                    simplex[0][1] + 0.5 * (simplex[2][1] - simplex[0][1])
+                ];
+                values[1] = f(simplex[1]);
+                values[2] = f(simplex[2]);
+            }
+        }
+
+        // Convergence criteria
+        let diff = Math.max(
+            Math.abs(values[0] - values[1]),
+            Math.abs(values[0] - values[2])
+        );
+        if (diff < tol) break;
+    }
+
+    return {x: simplex[0], fx: values[0]};
+}
+
+let Cartesian = function( azim, elev ) {
+    let r = Math.PI/2.0 - elev
+    let px = r * Math.cos( azim )
+    let py = r * Math.sin( azim )
+
+    return [px, py]
+}
+
 let AzElToPixel = function(azim,elev) {
     // Convert azimuth and elevation to pixel coordinates
     // Azimuth in radians measured from cardinal SOUTH
-
-    let COPx = calibrationState.COPx;
-    let COPy = calibrationState.COPy;
-    let V = calibrationState.V;
-    let a0 = calibrationState.a0 * Math.PI / 180.0;
     
-    //  First crude guess
-    var angle = Math.PI/2.0 + azim + a0;
+    let cart0 = Cartesian( azim, elev );
+    
+    let f = function( v ) {
+        let azel = PixelToAzEl( v[0], v[1] );
+        let cart = Cartesian( azel.azim, azel.elev );
 
-    var r = (Math.PI/2-elev)/V;
+        let dx = cart[0] - cart0[0];
+        let dy = cart[1] - cart0[1];
 
-    let px0 =   r*Math.cos(angle) + COPx;
-    let py0 =  -r*Math.sin(angle) + COPy;
+        return dx*dx + dy*dy;
+    };
+    
+    let result = nelderMead2D(f, [900,500], step = 100);
+    let vec = result.x;
 
-    var px = px0;
-    var py = py0;
-
-    for ( var i = 0; i < 15; ++i ) {
-        var azel = PixelToAzEl( px, py );
-        angle = Math.PI/2.0 + azel.azim + a0;
-
-        r = (Math.PI/2-azel.elev)/V;
-
-        let pxt =  r*Math.cos(angle) + COPx;
-        let pyt = -r*Math.sin(angle) + COPy;
-
-        let dpx = pxt - px0;
-        let dpy = pyt - py0;
-
-        px = px - dpx;
-        py = py - dpy;
-
-        let dsq = dpx*dpx + dpy*dpy;
-
-        if (dsq < 1.0e-6) {
-            break;
-        }
-    }
-
-    let obj = {};
-    obj.px = px;
-    obj.py = py;
-    return obj;
+    return { px: vec[0], py: vec[1] };
 };
 
 // Convert azimuth and elevation to degrees;
@@ -796,6 +859,7 @@ let utcToLocalHourMinute = function( utc ) {
 };
 
 let RecalcStartStopTimes = function( twilight ) {
+    RequestCalibration();
     let body = {"twilight": Number(twilight), "lat": calibrationState.cameraLatitude, "lon": calibrationState.cameraLongitude };
 
     m.request({
@@ -948,8 +1012,9 @@ let ForceTrigger = function() {
 
 let SubmitPlayback = function()
 {
-    const localDate = new Date( playbackState.year, playbackState.month, playbackState.day,
-                                playbackState.hour, playbackState.minute, playbackState.second );
+    var localDate = new Date();
+    localDate.setFullYear(playbackState.year, playbackState.month, playbackState.year );
+    localDate.setHours(playbackState.hour, playbackState.minute, playbackState.second );
     
     const body = { "year": localDate.getUTCFullYear(), "month": localDate.getUTCMonth(),
                    "day": localDate.getUTCDate(), "hour": localDate.getUTCHours(),

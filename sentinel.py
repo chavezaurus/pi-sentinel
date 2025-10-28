@@ -137,6 +137,25 @@ def round_to_nearest_5_minutes(dt, round_down=True):
     rounded_minutes = (minutes // 5) * 5 if round_down else ((minutes + 4) // 5) * 5
     return dt.replace(minute=rounded_minutes, second=0, microsecond=0)
 
+def get_sorted_jpegs_and_mp4s(directory):
+    # List all files in the directory
+    files = os.listdir(directory)
+
+    # Split files by extension, keeping only .jpeg and .mp4 files (case-insensitive)
+    jpeg_files = [f for f in files if f.lower().endswith('.jpg') and not f.lower().endswith("m.jpg")]
+    mp4_files  = [f for f in files if f.lower().endswith('.mp4')]
+
+    # Collect base names (without extension)
+    jpeg_bases = {os.path.splitext(f)[0] for f in jpeg_files}
+    mp4_bases  = {os.path.splitext(f)[0] for f in mp4_files}
+
+    # Find jpegs without matching mp4 base name
+    orphaned_jpegs = [f for f in jpeg_files if os.path.splitext(f)[0] not in mp4_bases]
+
+    # Build result: orphan jpegs (sorted) + mp4 files (sorted)
+    result = sorted(orphaned_jpegs) + sorted(mp4_files)
+    return result
+
 class SentinelServer(object):
 
     def __init__(self):
@@ -249,7 +268,7 @@ class SentinelServer(object):
     def moonPosition(self, file_path):
         f = open("calibration.json")
         if not f:
-            return
+            return 0.0, 0.0
 
         s = f.read()
         calibration_data = json.loads(s)
@@ -503,9 +522,8 @@ class SentinelServer(object):
         data = cherrypy.request.json
         self.relocateCurrent(data)
 
-        mp4files = glob.glob("new/s*.mp4")
-        mp4files = sorted(list(map(os.path.basename,mp4files)))
-        return mp4files
+        files = get_sorted_jpegs_and_mp4s("new")
+        return files
 
     @cherrypy.expose
     @cherrypy.tools.json_in()
@@ -515,9 +533,8 @@ class SentinelServer(object):
         data = cherrypy.request.json
         self.relocateCurrent(data)
 
-        mp4files = glob.glob("saved/s*.mp4")
-        mp4files = sorted(list(map(os.path.basename,mp4files)))
-        return mp4files
+        files = get_sorted_jpegs_and_mp4s("saved")
+        return files
 
     @cherrypy.expose
     @cherrypy.tools.json_in()
@@ -527,9 +544,8 @@ class SentinelServer(object):
         data = cherrypy.request.json
         self.relocateCurrent(data)
 
-        mp4files = glob.glob("trash/s*.mp4")
-        mp4files = sorted(list(map(os.path.basename,mp4files)))
-        return mp4files
+        files = get_sorted_jpegs_and_mp4s("trash")
+        return files
 
     @cherrypy.expose
     @cherrypy.tools.json_out()
