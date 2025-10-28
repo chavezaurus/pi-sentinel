@@ -614,6 +614,18 @@ class SentinelServer(object):
         return response
 
     @cherrypy.expose
+    @cherrypy.tools.json_out()
+    def empty_trash(self):
+        try:
+            for filename in os.listdir("trash"):
+                file_path = os.path.join("trash", filename)
+                if os.path.isfile(file_path):
+                    os.remove(file_path)
+            return { "response": "OK"}
+        except OSError as e:
+            return { "response": f"Error deleting files: {e}"}
+
+    @cherrypy.expose
     @cherrypy.tools.json_in()
     @cherrypy.tools.json_out()
     def set_state(self):

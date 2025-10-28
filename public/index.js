@@ -293,7 +293,8 @@ let Dropdown = {
                 m("a.dropdown-item", jpgObj, "Get Image"),
                 m("a.dropdown-item", csvObj, "Get CSV File"),
                 m(compoClass, {href: "#", onclick: SelfTest }, "Self Test"),
-                m(compoClass, {href: "#", onclick: () => (NumberDialog.isOpen = true) }, "Recalc Times")
+                m(compoClass, {href: "#", onclick: () => (NumberDialog.isOpen = true) }, "Recalc Times"),
+                m(compoClass, {href: "#", onclick: EmptyTrash}, "Empty Trash")
             ])
         ])
     }
@@ -512,6 +513,18 @@ let Analyze = function() {
         } else {
             csvFilePath = videoSource.replace(".mp4",".csv");
             setTimeout( WaitForCompletion, 3000 )
+        }
+    })
+    .catch(function(e) {
+        console.log( e.code );
+    })
+};
+
+let EmptyTrash = function() {
+    m.request({url: "empty_trash"})
+    .then(function(result) {
+        if ( result.response !== "OK" ) {
+            alert( "Error emptying trash" );
         }
     })
     .catch(function(e) {

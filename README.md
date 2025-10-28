@@ -13,26 +13,13 @@ HD 2mp for Automatic Vending Machines
 Black (25 Feet, 7.62 Meters)
 * WAVLINK USB 3.0 to SATA External Hard Drive Docking Station with 2USB 3.0 HUB and TF & SD Card for 2.5 inch/3.5 Inch HDD
 * Power Supply - CanaKit USB-C Power Supply
-* GPS Module - BE-280 GPS Module M10050 Chip with Ceramic Antenna Positioning Tracking TTL Level 38400bps Beidou GPS Antenna for Arduino Raspberry Pi Aircraft Pixhawk APM Flight Controller
+* GPS Module - VFAN USB GPS Receiver Antenna Gmouse for Laptop PC Car Marine Navigation Magnetic Base
 
 The camera has a fisheye lens but the full sky image is somewhat cropped at the top and bottom. 
 
 I wanted to have the camera far away from the Raspberry Pi, but since USB cables are not designed to work over long distances, I am using an Active Extension Cable that has built in circuitry to boost the signal.
 
 I am using a Hard Drive Docking station that lets me attach a 1TB SATA hard drive for archival storage, and also provides a powered USB hub that connects to and provides power to the camera.  I suspect that the Raspberry Pi may not have sufficient power to drive the camera and extension cable directly, so if you do not elect to provide a video archive, I would recommend that you still use a powered USB hub to drive the camera and extension cable.
-
-The GPS module provides serial timing information and a 1 pulse-per-second sync pulse.  These are used to improve the timing accuracy of the measurements.  The GPS module cable wires are connected to the Raspberry Pi GPIO connector as follows:
-
-* GPS Pin 1: 1PPS --- RPi GPIO 13 (PWM1) Pin 33
-* GPS Pin 2: Gnd  --- RPi Ground Pin 6
-* GPS Pin 3: Tx   --- Rpi GPIO 15 (UART RX) Pin 10
-* GPS Pin 4: Rx   --- 
-* GPS Pin 5: VCC  --- Rpi 5V Power Pin 2
-* GPS Pin 6: Boot ---
-
-The GPS module also provides a red flashing light coincident with the 1PPS signal that serves as a visual indication that the module is working correctly.  
-
-Note: The GPS Module should be kept several feet away from the hard drive and any other electrical equipment that could interfere with the GPS signals.
 
 ## Quick Start
 
