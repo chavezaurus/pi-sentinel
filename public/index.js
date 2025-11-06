@@ -1013,7 +1013,7 @@ let ForceTrigger = function() {
 let SubmitPlayback = function()
 {
     var localDate = new Date();
-    localDate.setFullYear(playbackState.year, playbackState.month, playbackState.year );
+    localDate.setFullYear(playbackState.year, playbackState.month, playbackState.day );
     localDate.setHours(playbackState.hour, playbackState.minute, playbackState.second );
     
     const body = { "year": localDate.getUTCFullYear(), "month": localDate.getUTCMonth(),
