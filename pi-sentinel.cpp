@@ -1148,7 +1148,7 @@ void SentinelCamera::stopCodec( int& fd )
 	close( fd );
 }
 
-void SentinelCamera::encodeJPEG( void* mem, const string& fileName )
+void SentinelCamera::encodeJPEG( void* mem, std::ostream& out )
 {
 	const int JPEG_MAX_SIZE = 1000000;
 	unsigned long jpegSize = JPEG_MAX_SIZE;
@@ -1167,7 +1167,6 @@ void SentinelCamera::encodeJPEG( void* mem, const string& fileName )
 	if ( err < 0 )
 		throw std::runtime_error("Jpeg encode failure");
 
-	std::ofstream out( fileName.c_str(), std::ios::binary );
 	out.write( (char *)jpeg, jpegSize );
 
 	delete [] jpeg;
@@ -2075,6 +2074,14 @@ void SentinelCamera::makeComposite( string filePath )
 	running = true;
 	unsigned char* composeBuffer = new unsigned char[1920*1088*3/2];
 
+	string p1 = filePath;
+	p1.replace(p1.find(".h264"),5,".jpg");
+	std::ofstream out1( p1.c_str(), std::ios::binary );
+
+	string p2 = p1;
+	p2.replace(p2.find(".jpg"),4,"m.jpg" );
+	std::ofstream out2( p2.c_str(), std::ios::binary );
+
 	auto fmax = [&](void* mem, string s) -> bool {	
 		unsigned char* Y = (unsigned char *)mem;
 
@@ -2101,20 +2108,23 @@ void SentinelCamera::makeComposite( string filePath )
 	memset(composeBuffer,0,1920*1088);
 	memset(composeBuffer+1920*1088,128,1920*1088/2);
 
-	processDecoded( filePath, fmax );
-	processMjpeg( filePath, fmax );
+	try {
+		processDecoded( filePath, fmax );
+		processMjpeg( filePath, fmax );
+	}
+	catch (const std::runtime_error& e){
+		std::cerr << "exception: " << e.what() << std::endl;
+	}
 
-	string p = filePath;
-	p.replace(p.find(".h264"),5,".jpg");
 
-	encodeJPEG( composeBuffer, p );
-	std::cerr << p << std::endl;
+	encodeJPEG( composeBuffer, out1 );
+	std::cerr << p1 << std::endl;
 
 	overlayMask(composeBuffer);
 	overlayCentroids(composeBuffer, filePath );
-	p.replace(p.find(".jpg"),4,"m.jpg" );
-	encodeJPEG( composeBuffer, p );
-	std::cerr << p << std::endl;
+
+	encodeJPEG( composeBuffer, out2 );
+	std::cerr << p2 << std::endl;
 
 	delete [] composeBuffer;
 	running = false;
@@ -2124,6 +2134,16 @@ void SentinelCamera::makeAnalysis( string filePath, double moonAzim, double moon
 {
 	if ( running )
 		return;
+
+	string txtPath = filePath;
+	txtPath.replace(txtPath.find(".h264"),5,".csv");
+
+	std::ofstream out( txtPath );
+	if ( !out.is_open() )
+	{
+		running = false;
+		return;
+	}
 
 	running = true;
 	int* averageBuffer = new int[1920*1080];
@@ -2205,8 +2225,19 @@ void SentinelCamera::makeAnalysis( string filePath, double moonAzim, double moon
 		moony = calibrationParameters["py"];
 	}
 
-	processDecoded( filePath, add30 );
-	processMjpeg( filePath, add30 );
+	try {
+		processDecoded( filePath, add30 );
+		processMjpeg( filePath, add30 );
+	}
+	catch (const std::runtime_error& e){
+		std::cerr << "exception: " << e.what() << std::endl;
+	}
+
+	if ( count == 0 )
+	{
+		running = false;
+		return;
+	}
 
     for ( int iy = 0; iy < 1080; ++iy )
     {
@@ -2231,21 +2262,16 @@ void SentinelCamera::makeAnalysis( string filePath, double moonAzim, double moon
         }
     }
 
-	processDecoded( filePath, centroid );
-	processMjpeg( filePath, centroid );
+	try {
+		processDecoded( filePath, centroid );
+		processMjpeg( filePath, centroid );
+	}
+	catch (const std::runtime_error& e){
+		std::cerr << "exception: " << e.what() << std::endl;
+	}
 
 	delete [] averageBuffer;
 	delete [] localMaskFrame;
-
-	string txtPath = filePath;
-	txtPath.replace(txtPath.find(".h264"),5,".csv");
-
-	std::ofstream out( txtPath );
-	if ( !out.is_open() )
-	{
-		running = false;
-		return;
-	}
 
 	out.precision(1);
 	for ( unsigned int i = 0; i < timeVector.size(); ++i )
@@ -2283,6 +2309,10 @@ void SentinelCamera::makeStarChart( string filePath )
 	running = true;
 	int* averageBuffer = new int[1920*1080];
 	unsigned char* composeBuffer = new unsigned char[1920*1088*3/2];
+
+	string p = filePath;
+	p.replace(p.find(".h264"),5,".jpg");
+	std::ofstream out( p.c_str(), std::ios::binary );
 
 	memset(averageBuffer, 0, sizeof(int)*1920*1080);
 	memset(composeBuffer+1920*1088, 128, 1920*1088/2);
@@ -2327,10 +2357,8 @@ void SentinelCamera::makeStarChart( string filePath )
 		composeBuffer[i] = scaled;
 	}
 
-	string p = filePath;
-	p.replace(p.find(".h264"),5,".jpg");
 
-	encodeJPEG( composeBuffer, p );
+	encodeJPEG( composeBuffer, out );
 
 	delete [] averageBuffer;
 	delete [] composeBuffer;

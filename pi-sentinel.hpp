@@ -142,7 +142,7 @@ public:
     void processMjpeg( string filePath, ProcessType process );
     void processDecoded( string videoFilePath, ProcessType process );
     void stopCodec( int& decoder_fd );
-    void encodeJPEG(void * mem, const string& fileName );
+    void encodeJPEG(void * mem, std::ostream& out );
     void readCalibrationParameters();
     void calibrationFunction();
     void inverseCalibration();
