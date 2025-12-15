@@ -11,15 +11,16 @@ The Pi Sentinel software is currently being used with the following hardware:
 HD 2mp for Automatic Vending Machines
 * USB Cable - C2G 38988 USB Active Extension Cable - USB 2.0 A Male to A Female Cable, Center Booster Format, 
 Black (25 Feet, 7.62 Meters)
-* WAVLINK USB 3.0 to SATA External Hard Drive Docking Station with 2USB 3.0 HUB and TF & SD Card for 2.5 inch/3.5 Inch HDD
-* Power Supply - CanaKit USB-C Power Supply
+* USB Hub - Raspberry Pi 3.0 USB Hub
+* Power Supply - UGREEN Nexode 100W GaN USB C Charger
+* External USB Hard Drive - Generic
 * GPS Module - VFAN USB GPS Receiver Antenna Gmouse for Laptop PC Car Marine Navigation Magnetic Base
 
 The camera has a fisheye lens but the full sky image is somewhat cropped at the top and bottom. 
 
 I wanted to have the camera far away from the Raspberry Pi, but since USB cables are not designed to work over long distances, I am using an Active Extension Cable that has built in circuitry to boost the signal.
 
-I am using a Hard Drive Docking station that lets me attach a 1TB SATA hard drive for archival storage, and also provides a powered USB hub that connects to and provides power to the camera.  I suspect that the Raspberry Pi may not have sufficient power to drive the camera and extension cable directly, so if you do not elect to provide a video archive, I would recommend that you still use a powered USB hub to drive the camera and extension cable.
+I have one output of the power supply powering the Raspberry Pi and a second output of the power supply powering the USB hub.  The USB cable to the camera, the USB cable to the camera, and the USB cable to the external hard drive are all plugged into the powered USB Hub.
 
 ## Quick Start
 
